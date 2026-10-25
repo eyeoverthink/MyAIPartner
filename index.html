@@ -35,6 +35,7 @@
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
     button { font-family: inherit; cursor: pointer; border: none; background: none; }
     input, select, textarea { font-family: inherit; }
+    @keyframes pulse { 0%,100% { transform: scale(1);} 50% { transform: scale(1.12);} }
     .bubble-user {
       background: var(--text);
       color: #fff;
@@ -272,6 +273,78 @@ function extractMemory(text, prev) {
   return { memory: next, changed };
 }
 
+/* ================= VOICE LAYER — webspeech today, Dessa drop-in when it ships =================
+   Architecture (per owner directive 2026-10-25): Block's Dessa (block.xyz/dessa) is a local
+   full-duplex speech-to-speech model (M4 Max+ Macs). No public API/weights yet (tracker:
+   getdessa.com). This layer ships a REAL working voice loop now (Web Speech API) and
+   auto-switches to a local Dessa endpoint the day it appears:
+     contract: GET  {dessaEndpoint}/health -> {"ok":true}
+               POST {dessaEndpoint}/listen {audio: base64} -> {text}
+               POST {dessaEndpoint}/speak  {text, voice}   -> audio bytes
+   Everything else in the app is engine-agnostic. */
+const PARTNER_VOICE = (() => {
+  const st = {
+    engine: "webspeech",            // or "dessa" after probe
+    dessaEndpoint: "http://127.0.0.1:9099",
+    recognized: false, listening: false, rec: null,
+  };
+  async function probeDessa() {
+    try {
+      const r = await fetch(st.dessaEndpoint + "/health", { signal: AbortSignal.timeout(1500) });
+      const j = await r.json();
+      st.engine = j.ok ? "dessa" : "webspeech";
+    } catch (_) { st.engine = "webspeech"; }
+    return st.engine;
+  }
+  function listen(onFinal, onStatus) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { onStatus && onStatus("No SpeechRecognition in this browser — try Chrome/Edge"); return; }
+    if (st.listening) { stop(); return; }
+    const rec = new SR();
+    rec.lang = (navigator.language || "en-US");
+    rec.continuous = false; rec.interimResults = true;
+    rec.onresult = (e) => {
+      let interim = "", final = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += t; else interim += t;
+      }
+      onStatus && onStatus(final || interim || "…");
+      if (final) { st.listening = false; onStatus && onStatus(null); onFinal(final.trim()); }
+    };
+    rec.onend = () => { if (st.listening) { st.listening = false; onStatus && onStatus(null); } };
+    rec.onerror = (e) => { st.listening = false; onStatus && onStatus(e.error === "not-allowed" ? "mic blocked — allow microphone" : e.error); };
+    st.rec = rec; st.listening = true;
+    try { rec.start(); } catch (_) {}
+  }
+  function stop() { try { st.rec && st.rec.stop(); } catch (_) {} st.listening = false; }
+  async function speak(text, onDone) {
+    if (!text) return;
+    if (st.engine === "dessa") {
+      try {
+        const r = await fetch(st.dessaEndpoint + "/speak", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, voice: "partner" }) });
+        const blob = await r.blob();
+        const a = new Audio(URL.createObjectURL(blob));
+        a.onended = () => onDone && onDone(); a.play();
+        return;
+      } catch (_) { /* fall through to webspeech */ }
+    }
+    if (!("speechSynthesis" in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const pick = speechSynthesis.getVoices().find(v => /Samantha|Ava|Jasmine|Aria|Google US English/i.test(v.name));
+    if (pick) u.voice = pick;
+    u.rate = 1.02; u.pitch = 1.04;
+    u.onend = () => onDone && onDone();
+    speechSynthesis.speak(u);
+  }
+  return { listen, stop, speak, probeDessa, get engine() { return st.engine; }, get listening() { return st.listening; } };
+})();
+window.PARTNER_VOICE = PARTNER_VOICE;
+window.addEventListener("load", () => PARTNER_VOICE.probeDessa());
+
 function App() {
   const saved = useMemo(() => loadState(), []);
 
@@ -293,6 +366,13 @@ function App() {
   const [jealous, setJealous] = useState(saved?.jealous ?? false);
   const [memory, setMemory] = useState(saved?.memory || {});
   const [typing, setTyping] = useState(false);
+  const [speakOn, setSpeakOn] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const voiceEngine = PARTNER_VOICE.engine; // "webspeech" | "dessa"
+  useEffect(() => { PARTNER_VOICE.probeDessa(); }, []);
+  const speakOnRef = useRef(false);
+  useEffect(() => { speakOnRef.current = speakOn; }, [speakOn]);
   const [toast, setToast] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const scrollRef = useRef(null);
@@ -427,6 +507,7 @@ function App() {
                 if (first) {
                   setTyping(false);
                   setMessages((m) => [...m, { id, role: "assistant", text: acc, ts: Date.now() }]);
+                  if (window.PARTNER_VOICE && speakOnRef.current) PARTNER_VOICE.speak(acc);
                   first = false;
                 } else {
                   setMessages((m) => m.map((x) => (x.id === id ? { ...x, text: acc } : x)));
@@ -458,6 +539,7 @@ function App() {
         memory: newMem
       });
       setMessages((m) => [...m, { id: (Date.now() + 1).toString(), role: "assistant", text: reply, ts: Date.now() }]);
+      if (window.PARTNER_VOICE && speakOnRef.current) PARTNER_VOICE.speak(reply);
       setTyping(false);
       setMood((m) => {
         if (text.toLowerCase().includes("fighting") || text.toLowerCase().includes("mad")) {
@@ -960,9 +1042,27 @@ function App() {
           {/* Composer */}
           <div style={{ padding: 16, borderTop: "1px solid var(--border)", background: "var(--surface)" }}>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+              <button
+                onClick={() => {
+                  if (listening) { PARTNER_VOICE.stop(); setListening(false); setTranscript(""); return; }
+                  setListening(true); setTranscript("… listening");
+                  PARTNER_VOICE.listen(
+                    (final) => { setListening(false); setTranscript(""); if (final) { setInput(final); setTimeout(() => send(), 60); } },
+                    (t) => setTranscript(t || ""));
+                }}
+                title="Voice input — webspeech now, auto-switches to local Dessa when it ships"
+                style={{
+                  width: 40, height: 40, borderRadius: 99, flexShrink: 0, fontSize: 16,
+                  border: "1px solid var(--border)", cursor: "pointer",
+                  background: listening ? "rgba(255,60,60,0.55)" : "var(--bg)",
+                  animation: listening ? "pulse 1.2s infinite" : "none"
+                }}
+              >
+                {listening ? "⏹" : "🎙"}
+              </button>
               <div style={{ flex: 1, position: "relative" }}>
                 <input
-                  value={input}
+                  value={transcript || input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -992,9 +1092,17 @@ function App() {
             </div>
             <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 10, color: "var(--muted)", lineHeight: 1.3 }}>
-                Runs local · chats stay on device · try “my favorite snack is …” or “call me …”
+                Runs local · chats stay on device · voice: {listening ? "listening…" : transcript || voiceEngine}
+                {voiceEngine === "dessa" ? " (DESSA ✓)" : ""}
               </div>
               <div style={{ display: "flex", gap: 6, fontSize: 10, fontWeight: 700 }}>
+                <button
+                  onClick={() => setSpeakOn(!speakOn)}
+                  title="Speak replies out loud (webspeech voice now; Dessa voice when it ships)"
+                  style={{ padding: "4px 8px", borderRadius: 99, border: "1px solid var(--border)",
+                           background: speakOn ? "rgba(120,255,160,0.25)" : "transparent", cursor: "pointer" }}>
+                  {speakOn ? "🔊 ON" : "🔇 OFF"}
+                </button>
                 <span style={{ padding: "4px 8px", borderRadius: 99, border: "1px solid var(--border)" }}>↵ Send</span>
               </div>
             </div>
