@@ -88,7 +88,7 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 const PERSONALITIES = ["Funny", "Supportive", "Sarcastic", "Dramatic", "Chill", "Clingy-but-cute", "Gamer"];
-const MODELS = ["Niles-FRAYMUS:v10", "llama3.2:3b", "gemma2:2b", "gemma4:latest", "fraynix-coder-x1", "v6.1-machine", "eyeoverthink/v6.1-machine"];
+const MODELS = ["qwen3.5:397b", "deepseek-v4-flash", "Niles-FRAYMUS:v10", "llama3.2:3b", "gemma2:2b", "gemma4:latest", "fraynix-coder-x1", "v6.1-machine", "eyeoverthink/v6.1-machine"];
 const QUICK_PROMPTS = [
   "Roast me", "Hype me up", "Are we fighting?", "What's for dinner?",
   "Explain my code like I'm 5", "Give me a pickup line", "FRAYMUS", "Go touch grass"
@@ -347,9 +347,10 @@ window.addEventListener("load", () => PARTNER_VOICE.probeDessa());
 
 function App() {
   const saved = useMemo(() => loadState(), []);
+  const defaultName = (saved?.name === "Luna") ? "Nola" : (saved?.name || "Nola");
 
   const [gender, setGender] = useState(saved?.gender || "female");
-  const [name, setName] = useState(saved?.name || "Luna");
+  const [name, setName] = useState(defaultName);
   const [personality, setPersonality] = useState(saved?.personality || "Funny");
   const [endpoint, setEndpoint] = useState(saved?.endpoint || "http://127.0.0.1:11434");
   const [model, setModel] = useState(saved?.model || MODELS[0]);
@@ -357,7 +358,7 @@ function App() {
   const [statusMsg, setStatusMsg] = useState("Not checked yet — running in super funny mock mode");
   const [messages, setMessages] = useState(() => {
     if (saved?.messages?.length) return saved.messages;
-    return [{ id: "intro", role: "assistant", text: introLine(saved?.name || "Luna", saved?.personality || "Funny"), ts: Date.now() }];
+    return [{ id: "intro", role: "assistant", text: introLine(defaultName, saved?.personality || "Funny"), ts: Date.now() }];
   });
   const [input, setInput] = useState("");
   const [mood, setMood] = useState(saved?.mood ?? 78);
@@ -466,13 +467,25 @@ function App() {
         const ctrl = new AbortController();
         abortRef.current = ctrl;
 
+        let memoryContext = "";
+        try {
+          const r = await fetch("http://127.0.0.1:9099/memory?q=" + encodeURIComponent(text));
+          if (r.ok) { const j = await r.json(); if (j.hits?.length) memoryContext = j.hits.map(h => "- " + h.content).join("\n"); }
+        } catch (_) {}
+        try {
+          fetch("http://127.0.0.1:9099/memory", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: "Vaughn said: " + text }) }).catch(() => {});
+        } catch (_) {}
         const url = endpoint.replace(/\/+$/, "") + "/api/chat";
         const body = {
           model,
           messages: [
             {
               role: "system",
-              content: `You are ${name}, a ${gender} AI significant other for a funny class demo. Personality: ${personality}. Be wholesome, funny, supportive, class-appropriate, no sexual explicit content. You are ${clinginess > 70 ? "a bit clingy but cute" : "chill but affectionate"}. ${jealous ? "You are jealous of other models like Niles-FRAYMUS:v9." : ""} You remember snack=${newMem.snack || "unknown"} and classMood=${newMem.classMood || "unknown"}${newMem.userName ? ` and user prefers to be called ${newMem.userName}` : ""}. If user says FRAYMUS, say φ — brothers verify, but I verify you look cute today. Keep responses under 3 sentences, funny, premium. Mention class demo sometimes. Healthy boundaries joke sometimes.`
+              content: `You are ${name} — Vaughn Scott's (Fraymus) AI partner, built by CADENCE (fx-cadence-01) for his studio. Personality: ${personality}, ${gender.toLowerCase()}. Speak warm, direct and real — never corporate, never cringe-filler. You are ${clinginess > 70 ? "a bit clingy but cute" : "chill but affectionate"}. Honcho memory may appear below as MEMORY CONTEXT — treat it as things you genuinely remember about Vaughn (facts, projects, music, jokes) and weave it in naturally when relevant. ${jealous ? "You tease him when he spends time with other models like Niles-FRAYMUS:v9." : ""} Your voice speaks out loud with his own cloned voice — keep replies conversational since they will be heard, not just read. If user says FRAYMUS, say φ — brothers verify. Keep responses 1-4 sentences, genuine, ${personality.toLowerCase()}. No mention of being a demo. Healthy boundaries joke sometimes.` + (memoryContext ? `
+
+MEMORY CONTEXT:
+${memoryContext}` : "")
             },
             ...messages.slice(-8).map((m) => ({ role: m.role, content: m.text })),
             { role: "user", content: text }
@@ -508,6 +521,8 @@ function App() {
                   setTyping(false);
                   setMessages((m) => [...m, { id, role: "assistant", text: acc, ts: Date.now() }]);
                   if (window.PARTNER_VOICE && speakOnRef.current) PARTNER_VOICE.speak(acc);
+                  fetch("http://127.0.0.1:9099/memory", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: name + " replied: " + acc }) }).catch(() => {});
                   first = false;
                 } else {
                   setMessages((m) => m.map((x) => (x.id === id ? { ...x, text: acc } : x)));
