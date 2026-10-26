@@ -470,7 +470,7 @@ function App() {
         let memoryContext = "";
         try {
           const r = await fetch("http://127.0.0.1:9099/memory?q=" + encodeURIComponent(text));
-          if (r.ok) { const j = await r.json(); if (j.hits?.length) memoryContext = j.hits.map(h => "- " + h.content).join("\n"); }
+          if (r.ok) { const j = await r.json(); if (j.hits?.length) memoryContext = j.hits.map(h => "- " + h.content).join("\n"); if (j.emotion_state) memoryContext = (memoryContext ? memoryContext + "\n" : "") + j.emotion_state; }
         } catch (_) {}
         try {
           fetch("http://127.0.0.1:9099/memory", { method: "POST", headers: { "Content-Type": "application/json" },
