@@ -3,3 +3,5 @@
 .env.*
 hf-token.txt
 node_modules
+dist
+coverage
