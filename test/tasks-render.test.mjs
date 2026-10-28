@@ -12,7 +12,7 @@ const compiled = await build({
   entryPoints: [fileURLToPath(new URL('../src/App.jsx', import.meta.url))],
   bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'silent',
   plugins: [{ name: 'shared-react', setup(builder) {
-    builder.onResolve({ filter: /^react$/ }, () => ({ path: import.meta.resolve('react'), external: true }));
+    builder.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: import.meta.resolve(args.path), external: true }));
   } }]
 });
 const { default: App } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
@@ -37,11 +37,13 @@ function renderStartup(pending = null) {
   }
 }
 
-test('actual App initial render includes collapsed scheduled tasks with no data or pending request', () => {
+test('actual App starts with scheduled tasks in a separate hidden page without submitting requests', () => {
   const markup = renderStartup();
-  assert.match(markup, /<details class="scheduled-tasks"><summary>Scheduled tasks<\/summary>/);
+  assert.match(markup, /<section class="workspace-page" hidden="" aria-label="Tasks">/);
+  assert.match(markup, /<details class="scheduled-tasks standalone" open=""><summary>Scheduled tasks<\/summary>/);
   assert.match(markup, /Task records have not been read/);
   assert.match(markup, /No task is created until you preview it and explicitly save/);
+  assert.match(markup, /Attach up to 4 files, 4 MiB each/);
   assert.match(markup, /<textarea aria-label="Separate task goal"[^>]*><\/textarea>/);
   assert.match(markup, /aria-label="Task title" maxLength="120"/);
   assert.match(markup, /aria-label="Separate task goal" rows="3" maxLength="20000"/);

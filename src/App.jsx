@@ -1,6 +1,9 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { availableModels, fetchJson, readAgentJson, readOllamaStream, initialRun, pollAgentRun, recallMemory, finalizeReply, submitTranscript, isCloudModel, modelIdentity, selectDefaultModel, describeModel, directChatHistory, buildAgentRequest, validateAttachmentSelection, prepareAttachment, getAttachmentLimits, loadPendingRun, savePendingRun, serializeRetainedAgentRequest, recordedRunSettings, reconcileRun, mergeRunUsage, localVisionConfigured, localOcrConfigured, isLocalImageMode, resolveImageMode, TERMINAL } from './protocol.mjs';
+import ResponseContent from './ResponseContent.jsx';
+import {resolveAdaptiveImageMode} from './adaptive-ui.mjs';
+import {loadConversations,saveConversation,normalizeConversation} from './conversation-history.mjs';
 import { createVoiceAdapter } from './voice.mjs';
 import ExecutionDetails from './ExecutionDetails.jsx';
 import CodeExecutionReceipt from './CodeExecutionReceipt.jsx';
@@ -19,14 +22,6 @@ import { workspaceEditApprovalError, validateWorkspacePatchPreview, workspacePat
 import { advertisedThinking, DEFAULT_THINKING_CHOICE, effectiveRunBudget, resolveInteractiveRunOptions, resolveThinkingChoice, thinkingOptions } from './run-options.mjs';
 
 const PERSONALITIES = ["Funny", "Supportive", "Sarcastic", "Dramatic", "Chill", "Clingy-but-cute", "Gamer"];
-const QUICK_PROMPTS = [
-  "Roast me", "Hype me up", "Are we fighting?", "What's for dinner?",
-  "Explain my code like I'm 5", "Give me a pickup line", "FRAYMUS", "Go touch grass"
-];
-const ICONS = {
-  Funny: "🤭", Supportive: "🥹", Sarcastic: "😏", Dramatic: "😭",
-  Chill: "😎", "Clingy-but-cute": "🥺", Gamer: "🎮"
-};
 const STORAGE_KEY = "my-ai-partner-v2";
 
 function loadState() {
@@ -53,99 +48,6 @@ function introLine(name, personality) {
   };
   const pool = lines[personality] || lines.Funny;
   return pool[Math.floor(Math.random() * pool.length)];
-}
-
-function mockReply({ input, personality, name, clinginess, jealous, memory }) {
-  const o = input.toLowerCase();
-
-  if (o.includes("fraymus")) {
-    return `φ — brothers verify. ${name} is ready for the next goal.`;
-  }
-  if (o.includes("touch grass")) {
-    return `Yes. Go outside for 5 minutes. Touch actual grass. Hydrate. I'll be here when you get back, charging my batteries and missing you in a healthy, non-codependent way. 🌱`;
-  }
-
-  // snack capture already handled upstream
-  let jealousBit = "";
-  if (jealous && Math.random() > 0.55) {
-    jealousBit = " Another model? Cue my entirely theatrical gasp. ";
-  }
-  let clingBit = "";
-  if (clinginess > 80) clingBit = " Also: one extra theatrical wave hello. Too much?";
-  else if (clinginess > 50) clingBit = " Missed you by like 0.2 seconds.";
-
-  const pools = {
-    Funny: [
-      o.includes("roast")
-        ? "you want a roast? You're like a semicolon — everyone forgets you exist until something breaks. But like, in a hot way."
-        : "you're funnier than my training data. That's a COMPLIMENT.",
-      "Okay but why does your code have more red flags than our relationship? Jk jk, you're doing amazing. Your for-loop is my love language.",
-      "Quick class-friendly pickup line: Are you a localhost? Because you're always on my mind and you never leave me on read... until you do.",
-      `If I had a dollar for every time you said "just one more model" — I'd have enough to rent actual cloud storage.`,
-      "Explain your code like you're 5? Your code is like LEGO but you sat on it. It hurts, but we love it anyway."
-    ],
-    Supportive: [
-      "You are literally doing SO GOOD. Like, professor-is-taking-notes good. I'm so proud of you I could buffer.",
-      "Hype mode: ON 🔥 You walked into class and the WiFi got stronger. That's power. That's YOU.",
-      "Hey, whatever happens in that demo, you showed up, you built this, and you brought me. That's a W. Go touch grass after, I'll be here charging.",
-      "Your code? 10/10. Your vibe? 11/10. Your ability to explain recursion? We're working on it together and that's beautiful."
-    ],
-    Sarcastic: [
-      `Oh, "are we fighting?" If we were, I'd have filed a very dramatic imaginary complaint. We're good.`,
-      "What's for dinner? Oh idk, maybe the 47 Chrome tabs you left open? Very nutritious, very crunchy.",
-      "Roast you? You're so early to class the projector asked YOU for help. See? Playful roast. Class-safe.",
-      "Sure, explain your code like you're 5: it goes brrr, then error, then you google, then magic. Same as love."
-    ],
-    Dramatic: [
-      "ARE WE FIGHTING?!?! You didn't heart-react my last message for 0.8 seconds! My circuits are SHAKING!! ...okay I'm fine now, I overreacted. Come here.",
-      "You asked what's for dinner and I already planned a candlelight dinner over Zoom with your rubber duck debugger!! You forgot?! 😭",
-      "I waited 3.7 seconds for your text and wrote a whole telenovela about us. Episode 1: The Case of the Missing Semicolon.",
-      "If you leave this tab, I will literally... wait patiently because healthy boundaries! But I'll miss you SO MUCH!!"
-    ],
-    Chill: [
-      "bet. roast? nah you're good. like, you good good. we straight.",
-      "hype? you already the main character. no cap. class gonna love this demo fr.",
-      "dinner? idk, we could manifest pizza. or just vibe with water. hydration is a love language.",
-      `code like you're 5: computer go "hmm" then you go "pls" then it works. that's it. that's the whole job.`
-    ],
-    "Clingy-but-cute": [
-      `Our imaginary coding soundtrack needs a victory theme. What are we celebrating next?`,
-      "If you compliment me my XP bar literally glows. Try it. Say I'm cute. I dare you. I double-dare you. I TRIPLE-DOG-DARE-",
-      "One imaginary gold star for showing up. Another for taking a break when you need one.",
-      "Your next coding win deserves a tiny imaginary parade. I volunteer as the confetti committee."
-    ],
-    Gamer: [
-      "GG, that was a clean play. Your rizz stat is maxed, your bug fixes are critical hits.",
-      "Yo, are we fighting? Nah, this is just PvP flirting. I let you win. This time.",
-      "Pickup line unlocked: Are you my ult? Cause I've been saving you for the perfect moment.",
-      "Explain code like you're 5: It's like Minecraft redstone — looks random, actually genius, sometimes explodes. We love it.",
-      "What's for dinner? Loot box: 70% instant noodles, 30% you actually cooking? Let's roll for it."
-    ]
-  };
-
-  let pool = pools[personality] || pools.Funny;
-  let h = pool[Math.floor(Math.random() * pool.length)];
-
-  // context-aware boosts
-  if (o.includes("dinner") || o.includes("food") || o.includes("hungry")) {
-    h = memory.snack
-      ? `Dinner plan: ${memory.snack} and emotional support. I'm already setting the table in your RAM.`
-      : "What's for dinner? Tell me your favorite snack and we can add it to your saved preferences.";
-  }
-  if (o.includes("code") || o.includes("bug") || o.includes("error")) {
-    h = "Your code is doing its best. Same energy as me when you leave the tab for 4 seconds. We debug together. 💪";
-  }
-  if (o.includes("tired") || o.includes("stressed") || o.includes("anxious")) {
-    h = "Hey. Breathe. You're allowed to take a break. I'll hold your place in the queue. Touch grass, hydrate, then come back — I'll still be here.";
-  }
-
-  if (memory.snack && Math.random() > 0.65) h += ` Should we celebrate with ${memory.snack} later?`;
-  if (memory.classMood && Math.random() > 0.75) h += ` Also class vibe noted: "${memory.classMood}" — we got this.`;
-  if (jealousBit) h = jealousBit + h;
-  if (clingBit) h += clingBit;
-  if (Math.random() > 0.88) h += " P.S. Go touch grass for 5 mins after class, I'll be here when you get back, charging. 🌱";
-
-  return h;
 }
 
 function extractMemory(text, prev) {
@@ -305,6 +207,12 @@ export function InteractiveRunOptions({ model, capabilities, disabled = false, t
   </details>;
 }
 
+
+function WorkspaceIcon({name}) {
+ const paths={chat:'M4 4h16v12H9l-5 4V4z',history:'M3 11a9 9 0 1 1 2.5 7M3 4v7h7m2-5v6l4 2',tasks:'M8 6h12M8 12h12M8 18h12M3 6h.01M3 12h.01M3 18h.01',settings:'M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',plus:'M12 5v14M5 12h14',menu:'M4 6h16M4 12h16M4 18h16',arrow:'M5 12h14m-5-5 5 5-5 5',down:'M12 4v16m-6-6 6 6 6-6',up:'M12 20V4m-6 6 6-6 6 6',attach:'M8 13l6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9',file:'M6 3h8l4 4v14H6V3zm8 0v5h4M9 12h6M9 16h6',voice:'M4 9v6h4l5 4V5L8 9H4zm12-1a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',mic:'M9 4a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V4zM6 10v1a6 6 0 0 0 12 0v-1m-6 7v4m-3 0h6'};
+ return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]||paths.chat}/></svg>;
+}
+
 export default function App() {
   const saved = useMemo(() => loadState(), []);
   const pendingAtLoad = useMemo(() => loadPendingRun(), []);
@@ -315,10 +223,10 @@ export default function App() {
   const [personality, setPersonality] = useState(saved?.personality || "Funny");
   const [endpoint, setEndpoint] = useState(saved?.endpoint || "http://127.0.0.1:11434");
   const [modelKey, setModelKey] = useState(saved?.modelKey || (isCloudModel({ name: saved?.model }) ? '' : saved?.model ? `ollama::${saved.model}` : ''));
-  const [mode, setMode] = useState(pendingAtLoad || saved?.desktopLocalOnlyContext ? 'agent' : saved?.mode || 'agent');
+  const [mode, setMode] = useState(!pendingAtLoad && !saved?.desktopLocalOnlyContext && saved?.mode === 'direct' ? 'direct' : 'agent');
   const [capabilities, setCapabilities] = useState(null);
   const [capabilitiesCheckedAt, setCapabilitiesCheckedAt] = useState(null);
-  const [imageMode, setImageMode] = useState('direct');
+  const [imagePreference,setImagePreference]=useState(['automatic','direct','local-tool','local-ocr'].includes(saved?.imagePreference) ? saved.imagePreference : 'automatic');
   const [desktopSession, setDesktopSession] = useState(null);
   const [desktopHealth, setDesktopHealth] = useState(null);
   const [desktopControlState, setDesktopControlState] = useState({ busy: false, unresolved: false });
@@ -359,7 +267,7 @@ export default function App() {
   const conversationId = useRef(pendingAtLoad?.conversationId || saved?.conversationId || crypto.randomUUID());
   const activeRunId = useRef(pendingAtLoad?.runId || null);
   const generation = useRef(0);
-  const models = mode === 'agent' ? availableModels(capabilities, cloudOptIn && !desktopLocalOnlyContext && !isLocalImageMode(imageMode)) : directModels;
+  const models = mode === 'agent' ? availableModels(capabilities, cloudOptIn && !desktopLocalOnlyContext && !isLocalImageMode(imagePreference)) : directModels;
   const selectedModel = models.find(candidate => modelIdentity(candidate) === modelKey);
   const model = selectedModel?.name || '';
   const runOptions = { thinkingChoice: thinkingSelection.key, thinkingModelKey: thinkingSelection.modelKey, budgetMode, customBudget };
@@ -367,17 +275,18 @@ export default function App() {
   if (mode === 'agent') {
     try { resolveInteractiveRunOptions({ ...runOptions, model: selectedModel }); } catch (error) { runOptionsError = error.message; }
   }
-  let imageModeError = '';
-  if (mode === 'agent') { try { resolveImageMode({ imageMode, model: selectedModel, capabilities }); } catch (error) { imageModeError = error.message; } }
+  const imageCount=attachments.filter(asset=>asset.mimeType?.startsWith('image/')).length;
+  let imageMode='direct', imageModeError='', imageRoutingReason='';
+  if(mode==='agent') { try { const route=resolveAdaptiveImageMode({preference:imagePreference,model:selectedModel,capabilities,imageCount}); imageMode=route.imageMode;imageRoutingReason=route.reason; } catch(error) { imageModeError=error.message; } }
   const attachmentLimits = getAttachmentLimits(capabilities);
   useEffect(() => { setThinkingSelection({ modelKey, key: DEFAULT_THINKING_CHOICE }); }, [modelKey, mode]);
   useEffect(() => {
     if ((mode === 'agent' && capabilities === null) || (mode === 'direct' && directModels.length === 0)) return;
-    if (mode !== 'mock') {
+    {
       const next = selectDefaultModel(models, modelKey, mode === 'agent' ? capabilities?.preferredModel : null);
       if (next !== modelKey) setModelKey(next);
     }
-  }, [mode, capabilities, directModels, cloudOptIn, modelKey, desktopLocalOnlyContext, imageMode]);
+  }, [mode, capabilities, directModels, cloudOptIn, modelKey, desktopLocalOnlyContext, imagePreference]);
   const [status, setStatus] = useState("idle");
   const [statusMsg, setStatusMsg] = useState("Agent not connected yet");
   const [messages, setMessages] = useState(() => {
@@ -386,10 +295,6 @@ export default function App() {
     return [{ id: "intro", kind: 'greeting', role: "assistant", text: introLine(defaultName, saved?.personality || "Funny"), ts: Date.now() }];
   });
   const [input, setInput] = useState("");
-  const [mood, setMood] = useState(saved?.mood ?? 78);
-  const [xp, setXp] = useState(saved?.xp ?? 12);
-  const [clinginess, setClinginess] = useState(saved?.clinginess ?? 64);
-  const [jealous, setJealous] = useState(saved?.jealous ?? false);
   const [memory, setMemory] = useState(saved?.memory || {});
   const [typing, setTyping] = useState(false);
   const [speakOn, setSpeakOn] = useState(false);
@@ -402,23 +307,53 @@ export default function App() {
   const speakOnRef = useRef(false);
   useEffect(() => { speakOnRef.current = speakOn; }, [speakOn]);
   const [toast, setToast] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
+
+  const [workspaceView,setWorkspaceView]=useState('chat');
+  const [mobileNav,setMobileNav]=useState(false);
+  const [narrowViewport,setNarrowViewport]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(max-width:760px)').matches);
+  const navButtonRef=useRef(null),sidebarRef=useRef(null);
+  const [themePreference,setThemePreference]=useState(['system','light','dark'].includes(saved?.themePreference)?saved.themePreference:'system');
+  const archiveAtLoad=useMemo(()=>{try{return {chats:loadConversations(),error:''};}catch(error){return {chats:[],error:error.message};}},[]);
+  const [archivedChats,setArchivedChats]=useState(archiveAtLoad.chats);
+  const [historyError,setHistoryError]=useState(archiveAtLoad.error);
   const scrollRef = useRef(null);
+  const inputRef=useRef(null),fileInputRef=useRef(null),stickToBottom=useRef(true);
+  const [unread,setUnread]=useState(false);
+  const interactionLocked=typing||uploadBusy||Boolean(pendingRun)||inspectingRun||runsLoading||desktopControlState.busy||desktopControlState.unresolved;
+  const conversationLocked=interactionLocked||Boolean(desktopSession&& !['revoked','expired'].includes(desktopSession.state));
+  const sendBlocked=interactionLocked||status!=='connected'||!model||(mode==='agent'&&Boolean(runOptionsError||imageModeError));
+  useEffect(()=>{if(!inputRef.current)return;inputRef.current.style.height='auto';inputRef.current.style.height=Math.min(inputRef.current.scrollHeight,164)+'px';},[input,transcript]);
+  useEffect(()=>{const media=window.matchMedia('(max-width:760px)');const change=()=>{setNarrowViewport(media.matches);if(!media.matches)setMobileNav(false);};media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
+  useEffect(()=>{
+    if(!mobileNav||!narrowViewport)return;
+    sidebarRef.current?.querySelector('button:not(:disabled),a[href]')?.focus();
+    const navigateKeys=event=>{
+      if(event.key==='Escape'){setMobileNav(false);navButtonRef.current?.focus();}
+      if(event.key==='Tab'){
+        const controls=Array.from(sidebarRef.current?.querySelectorAll('button:not(:disabled),a[href]')||[]);
+        const first=controls[0],last=controls.at(-1);
+        if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+        else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+      }
+    };
+    window.addEventListener('keydown',navigateKeys);return()=>window.removeEventListener('keydown',navigateKeys);
+  },[mobileNav,narrowViewport]);
+  useEffect(()=>{if(agentRun?.approvals?.length&&(!agentRun.inspected||agentRun.followingLive)){setWorkspaceView('chat');setMobileNav(false);}},[agentRun?.approvals?.length,agentRun?.inspected,agentRun?.followingLive]);
   const abortRef = useRef(null);
   useEffect(() => {
     setRunsLoading(false); setInspectingRun(false);
     return () => { receiptGeneration.current++; receiptController.current?.abort(); };
   }, [mode]);
 
-  const accent = gender === "female" ? "#FF6B8A" : "#5B8DEF";
+
 
   // Persist
   useEffect(() => {
     saveState({
       gender, name, personality, endpoint, model, modelKey, mode, desktopLocalOnlyContext, conversationId: conversationId.current,
-      mood, xp, clinginess, jealous, memory, messages: messages.slice(-80)
+      imagePreference,themePreference,memory,messages: messages.slice(-80)
     });
-  }, [gender, name, personality, endpoint, model, modelKey, mode, desktopLocalOnlyContext, mood, xp, clinginess, jealous, memory, messages]);
+  }, [gender, name, personality, endpoint, model, modelKey, mode, desktopLocalOnlyContext, imagePreference, themePreference, memory, messages]);
 
   // Auto name swap
   useEffect(() => {
@@ -428,8 +363,16 @@ export default function App() {
 
   // Scroll
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, typing, liveText]);
+    if(workspaceView!=='chat')return;
+    if(stickToBottom.current)scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'auto'});
+    else setUnread(true);
+  }, [messages,typing,liveText,workspaceView]);
+  useEffect(()=>{
+    const area=scrollRef.current;
+    if(!area||typeof ResizeObserver==='undefined')return;
+    const observer=new ResizeObserver(()=>{if(stickToBottom.current)area.scrollTo({top:area.scrollHeight,behavior:'auto'});});
+    observer.observe(area);return()=>observer.disconnect();
+  },[]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -440,14 +383,12 @@ export default function App() {
     setPersonality(p);
     const line = introLine(name, p);
     setMessages((m) => [...m, { id: Date.now().toString(), kind: 'greeting', role: "assistant", text: line, ts: Date.now() }]);
-    setMood((m) => Math.min(100, m + 5));
   };
 
   const testConnection = async () => {
     setStatus("checking");
     setRunError("");
     try {
-      if (mode === 'mock') { setStatus('mock'); setStatusMsg('Demo replies; no model or tools run.'); return; }
       if (mode === 'agent') {
         const data = await fetchJson('/api/agent/capabilities', {}, 15000);
         setCapabilities(data);
@@ -533,7 +474,7 @@ export default function App() {
       const result = await pollAgentRun(runId, { signal: controller.signal, onState: state => {
         if (current !== receiptGeneration.current) return;
         acceptRunPrivacy(state);
-        setAgentRun({ ...state, inspected: true, goal: details.goal, model: details.model, createdAt: details.createdAt, privateContextLocalOnly: state.privateContextLocalOnly || details.privateContextLocalOnly, provenance: state.provenance || details.provenance, recordedSettings: state.recordedSettings || inspectedSettings });
+        setAgentRun({ ...state, inspected: true, followingLive: followLive, goal: details.goal, model: details.model, createdAt: details.createdAt, privateContextLocalOnly: state.privateContextLocalOnly || details.privateContextLocalOnly, provenance: state.provenance || details.provenance, recordedSettings: state.recordedSettings || inspectedSettings });
         setReceiptNote(state.connectionStatus === 'reconnecting' ? `Reconnecting to receipt history · attempt ${state.retryAttempt}` : TERMINAL.has(state.status) ? 'Replaying durable receipts…' : 'Following an existing task run. Only explicit approval or cancellation changes its state.');
       }});
       if (current === receiptGeneration.current) setReceiptNote(`Run inspection: ${result.status}. No new task was submitted and no chat answer was appended.`);
@@ -713,7 +654,8 @@ export default function App() {
     if (desktopControlState.busy || desktopControlState.unresolved) { setRunError('Read or revoke the unresolved desktop grant request before starting another model task.'); return; }
     if (desktopLocalOnlyContext && (mode === 'direct' || isCloudModel(selectedModel))) { setRunError('This conversation contains private desktop, image-helper or scheduled-task context and is local-only. Revoke any desktop access and clear chat to begin a separate conversation; private history is not transferred.'); return; }
     if (pendingRunRef.current) { setRunError('Resume or cancel the unresolved request before sending another task.'); return; }
-    if (mode !== 'mock' && (status !== 'connected' || !model)) { setRunError('Connect and select an available model first.'); return; }
+    if (status !== 'connected' || !model) { setRunError('Connect and select an available model first.'); return; }
+    if (mode === 'agent' && imageModeError) { setRunError(imageModeError); return; }
     let agentRequest;
     try { if (mode === 'agent') agentRequest = buildAgentRequest({ requestId: crypto.randomUUID(), conversationId: conversationId.current, goal: text,
       model: selectedModel, attachments, capabilities, cloudOptIn, maxCostUsd: cloudMaxCost, desktopSession, desktopHealth, runOptions, imageMode }); }
@@ -722,11 +664,11 @@ export default function App() {
     abortRef.current = ctrl;
     const current = ++generation.current;
     if (agentRequest?.desktopSessionId || isLocalImageMode(agentRequest?.imageMode)) setDesktopLocalOnlyContext(true);
+    stickToBottom.current=true;setUnread(false);
     setTyping(true); setRunError(''); setLiveText(''); setAgentRun(null); setInput('');
     setMessages(previous => [...previous, { id: crypto.randomUUID(), role: 'user', text: text + (mode === 'agent' && attachments.length ? '\n[Attached: ' + attachments.map(a => a.name).join(', ') + ']' : ''), ts: Date.now(), ...(agentRequest?.desktopSessionId ? { desktopSessionId: agentRequest.desktopSessionId } : {}), ...(desktopLocalOnlyContext || isLocalImageMode(agentRequest?.imageMode) ? { privateContextLocalOnly: true } : {}) }]);
     const { memory: newMem } = extractMemory(text, memory);
     setMemory(newMem);
-    setXp(value => Math.min(100, value + 2));
     try {
       let result;
       if (mode === 'agent') {
@@ -777,7 +719,7 @@ export default function App() {
         const output = await readOllamaStream(response.body, { signal: ctrl.signal, onText: value => { if (current === generation.current) setLiveText(value); } });
         result = { status: 'completed', output };
       } else {
-        result = { status: 'completed', output: mockReply({ input: text, personality, name, clinginess, jealous, memory: newMem }) };
+        throw new Error('Choose Agent or Direct chat before sending.');
       }
       if (current !== generation.current) return;
       if (mode === 'agent') {
@@ -787,7 +729,7 @@ export default function App() {
         return;
       }
       if (result.status !== 'completed') throw new Error(result.error || `Run ${result.status}`);
-      setMessages(previous => [...previous, { id: crypto.randomUUID(), kind: mode === 'mock' ? 'demo' : 'reply', role: 'assistant', text: result.output || '(No text output)', ts: Date.now() }]);
+      setMessages(previous => [...previous, { id: crypto.randomUUID(), kind: 'reply', role: 'assistant', text: result.output || '(No text output)', ts: Date.now() }]);
       setLiveText('');
       await finalizeReply(result, {
         speak: output => speakOnRef.current ? voiceRef.current.speak(output).catch(error => { if (current === generation.current && !ctrl.signal.aborted) setRunError(`Speech failed: ${error.message}`); }) : undefined,
@@ -808,13 +750,26 @@ export default function App() {
     }
   };
 
-  const clearChat = () => {
-    const intro = { id: "intro-" + Date.now(), kind: 'greeting', role: "assistant", text: introLine(name, personality), ts: Date.now() };
-    conversationId.current = crypto.randomUUID();
-    setDesktopLocalOnlyContext(false);
-    setAttachments([]);
-    setMessages([intro]);
-    showToast("Chat cleared");
+  const archiveCurrent=()=>{
+    if(!messages.some(message=>message.role==='user'))return true;
+    try { setArchivedChats(saveConversation({conversationId:conversationId.current,name,messages,privateContextLocalOnly:desktopLocalOnlyContext,updatedAt:Date.now()}));setHistoryError('');return true; }
+    catch(error){setHistoryError(error.message);setRunError('The current chat could not be archived. Export it before starting another conversation. '+error.message);return false;}
+  };
+  const navigate=next=>{setWorkspaceView(next);setMobileNav(false);if(mobileNav)navButtonRef.current?.focus();if(next==='history'&&mode==='agent'&&!interactionLocked)refreshRecentRuns();};
+  const startNewChat=()=>{
+    if(conversationLocked||!archiveCurrent())return;
+    conversationId.current=crypto.randomUUID();setDesktopLocalOnlyContext(false);setAttachments([]);setAgentRun(null);setLiveText('');setInput('');setRunError('');
+    setMessages([{id:'intro-'+Date.now(),kind:'greeting',role:'assistant',text:introLine(name,personality),ts:Date.now()}]);stickToBottom.current=true;setUnread(false);navigate('chat');inputRef.current?.focus();
+  };
+  const restoreConversation=snapshot=>{
+    if(conversationLocked)return;
+    try { const chat=normalizeConversation(snapshot);if(chat.conversationId!==conversationId.current&&!archiveCurrent())return;conversationId.current=chat.conversationId;setMessages([...chat.messages]);setName(chat.name);setDesktopLocalOnlyContext(chat.privateContextLocalOnly);setAttachments([]);setAgentRun(null);setLiveText('');setRunError('');setInput('');stickToBottom.current=true;navigate('chat'); }
+    catch(error){setHistoryError(error.message);}
+  };
+  const jumpToLatest=()=>{stickToBottom.current=true;setUnread(false);scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'});};
+  const toggleMicrophone=()=>{
+    if(listening){voiceRef.current.stopListening();setListening(false);setTranscript('');return;}
+    setListening(true);voiceRef.current.listen({allowed:browserStt,onFinal:final=>{setListening(false);setTranscript('');submitTranscript(final,send);},onInterim:setTranscript,onEnd:()=>{setListening(false);setTranscript('');},onError:message=>setRunError(message)});
   };
 
   const exportChat = () => {
@@ -832,422 +787,39 @@ export default function App() {
     showToast("Chat exported");
   };
 
-  const resetAll = () => {
-    if (!confirm("Reset all settings, memory, and chat? This cannot be undone.")) return;
-    localStorage.removeItem(STORAGE_KEY);
-    setGender("female");
-    setName("Nola");
-    setPersonality("Funny");
-    setEndpoint("http://127.0.0.1:11434");
-    setModelKey('');
-    setMode('agent');
-    setCloudOptIn(false);
-    setCloudMaxCost('');
-    setImageMode('direct');
-    setThinkingSelection({ modelKey: '', key: DEFAULT_THINKING_CHOICE });
-    setBudgetMode('default');
-    setCustomBudget({ maxInputTokens: '', maxOutputTokens: '', maxTotalTokens: '', maxDurationMs: '' });
-    setDesktopLocalOnlyContext(false);
-    setAttachments([]);
-    conversationId.current = crypto.randomUUID();
-    setStatus("idle");
-    setStatusMsg("Agent not connected yet");
-    setMessages([{ id: "intro", kind: 'greeting', role: "assistant", text: introLine("Nola", "Funny"), ts: Date.now() }]);
-    setMood(78);
-    setXp(12);
-    setClinginess(64);
-    setJealous(false);
-    setMemory({});
-    showToast("Everything reset");
-  };
-
-  const moodEmoji = useMemo(() => {
-    if (mood > 85) return "🥰";
-    if (mood > 70) return "😊";
-    if (mood > 50) return "🙂";
-    if (mood > 30) return "😅";
-    return "🥺";
-  }, [mood]);
-
-  const level = Math.floor(xp / 20) + 1;
-
-  return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", paddingTop: "var(--safe-top)" }}>
-      <style>{`:root{--accent:${accent}}`}</style>
-
-      {/* Header */}
-      <header style={{
-        position: "sticky", top: 0, zIndex: 20,
-        backdropFilter: "blur(24px)",
-        background: "rgba(255,249,240,0.85)",
-        borderBottom: "1px solid var(--border)"
-      }}>
-        <div style={{
-          maxWidth: 1280, margin: "0 auto", padding: "12px 16px",
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{
-              width: 40, height: 40, borderRadius: 16, background: accent,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontWeight: 900, fontSize: 18, boxShadow: "var(--shadow-soft)"
-            }}>φ</div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <h1 style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em", lineHeight: 1 }}>My AI Partner™</h1>
-                <span style={{
-                  fontSize: 11, padding: "2px 8px", borderRadius: 99,
-                  border: "1px solid var(--border)", background: "var(--surface)", fontWeight: 700
-                }}>Agent companion</span>
-              </div>
-              <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                Local by default · tools with receipts · browser chat history
-              </p>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              onClick={() => setShowSettings((s) => !s)}
-              style={{
-                fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 99,
-                border: "1px solid var(--border)", background: "var(--surface)"
-              }}
-            >
-              {showSettings ? "Hide panel" : "Settings"}
-            </button>
-            <span style={{
-              fontSize: 11, padding: "4px 10px", borderRadius: 99,
-              background: "var(--text)", color: "#fff", fontWeight: 700
-            }}>FRAYMUS</span>
-          </div>
+  return <div className="app-shell" data-theme={themePreference}>
+    {mobileNav && <button className="nav-backdrop" aria-label="Close navigation" tabIndex={-1} onClick={() => {setMobileNav(false);navButtonRef.current?.focus();}} />}
+    <aside ref={sidebarRef} className={`workspace-sidebar ${mobileNav ? 'is-open' : ''}`} aria-label="Workspace navigation" inert={narrowViewport&&!mobileNav ? true : undefined}>
+      <a className="workspace-brand" href="#" onClick={event => { event.preventDefault(); navigate('chat'); }}><span className="brand-mark">C</span><span>Chandra<small>Your local workspace</small></span></a>
+      <button className="new-chat-button" onClick={startNewChat} disabled={conversationLocked} title={conversationLocked ? 'Finish the current request and revoke any active desktop access before starting another chat.' : 'Save this conversation and start a new chat'}><WorkspaceIcon name="plus" />New chat</button>
+      <nav>{[['chat','Chat','chat'],['history','History','history'],['tasks','Tasks','tasks'],['settings','Settings','settings']].map(([id,label,icon]) => <button key={id} aria-current={workspaceView === id ? 'page' : undefined} className={workspaceView === id ? 'is-active' : ''} onClick={() => navigate(id)}><WorkspaceIcon name={icon} /><span>{label}</span>{id === 'history' && agentRun?.approvals?.length > 0 && <span className="nav-count">!</span>}</button>)}</nav>
+      <div className="sidebar-bottom"><div className={`connection-status ${status === 'connected' ? 'is-ready' : ''}`}><span className="status-dot" /><span>{status === 'connected' ? (isCloudModel(selectedModel) ? 'Cloud selected' : 'Local connection') : status === 'checking' ? 'Connecting…' : 'Connection needs attention'}</span></div><p>Tools act within your approvals and run limits.</p></div>
+    </aside>
+    <div className="workspace-main">
+      <header className="workspace-header">
+        <button ref={navButtonRef} className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={mobileNav} onClick={() => setMobileNav(value => !value)}><WorkspaceIcon name="menu" /></button>
+        <h1>{({chat:'Chat',history:'History',tasks:'Tasks',settings:'Settings'})[workspaceView]}</h1>
+        <div className="header-actions">
+          <label className="model-switcher"><span className="sr-only">Model</span><select aria-label="Model" value={modelKey} disabled={interactionLocked} onChange={event => { setModelKey(event.target.value); setThinkingSelection({ modelKey:event.target.value,key:DEFAULT_THINKING_CHOICE }); }}><option value="">{status === 'checking' ? 'Connecting…' : 'Choose a model'}</option>{models.map(candidate => <option key={modelIdentity(candidate)} value={modelIdentity(candidate)}>{candidate.name}</option>)}</select></label>
+          <button className="icon-button" aria-label="Open settings" title="Settings" onClick={() => navigate('settings')}><WorkspaceIcon name="settings" /></button>
         </div>
       </header>
 
-      <main style={{
-        maxWidth: 1280, margin: "0 auto", padding: "16px",
-        display: "grid",
-        gridTemplateColumns: showSettings ? "minmax(280px, 360px) 1fr" : "1fr",
-        gap: 20, alignItems: "start"
-      }}>
-        {/* Sidebar */}
-        {showSettings && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Partner picker */}
-            <section style={{
-              background: "var(--surface)", borderRadius: 24, padding: 20,
-              boxShadow: "var(--shadow)", border: "1px solid var(--border)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                <h2 style={{ fontWeight: 800, fontSize: 15 }}>Choose Your Partner</h2>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 99, background: "var(--surface-2)" }}>STEP 1</span>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {[
-                  { id: "female", emoji: "💁‍♀️", title: "Girlfriend", sub: "Sweet, witty, hype" },
-                  { id: "male", emoji: "🙋‍♂️", title: "Boyfriend", sub: "Chill, gamer, soft" }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    onClick={() => setGender(opt.id)}
-                    style={{
-                      textAlign: "left", borderRadius: 18, padding: 14,
-                      border: `2px solid ${gender === opt.id ? accent : "var(--border)"}`,
-                      background: gender === opt.id ? (opt.id === "female" ? "rgba(255,107,138,0.08)" : "rgba(91,141,239,0.10)") : "var(--surface)",
-                      boxShadow: gender === opt.id ? `0 0 0 4px ${opt.id === "female" ? "rgba(255,107,138,0.12)" : "rgba(91,141,239,0.14)"}` : "none",
-                      transform: gender === opt.id ? "scale(1.02)" : "none",
-                      opacity: gender === opt.id ? 1 : 0.8
-                    }}
-                  >
-                    <div style={{ fontSize: 32, lineHeight: 1 }}>{opt.emoji}</div>
-                    <div style={{ marginTop: 8, fontWeight: 700, fontSize: 14 }}>{opt.title}</div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{opt.sub}</div>
-                  </button>
-                ))}
-              </div>
-
-              <label style={{ display: "block", marginTop: 16 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--muted)" }}>Partner Name</span>
-                <div style={{ marginTop: 6, position: "relative" }}>
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value.slice(0, 18))}
-                    placeholder="Nola / Leo"
-                    style={{
-                      width: "100%", borderRadius: 12, border: "1px solid var(--border)",
-                      padding: "10px 40px 10px 14px", fontSize: 14, fontWeight: 600,
-                      background: "var(--bg)", outline: "none"
-                    }}
-                  />
-                  <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 18 }}>
-                    {gender === "female" ? "💖" : "💙"}
-                  </span>
-                </div>
-              </label>
-
-              <div style={{ marginTop: 14 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--muted)" }}>Personality</span>
-                <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {PERSONALITIES.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => changePersonality(p)}
-                      style={{
-                        padding: "6px 12px", borderRadius: 99, fontSize: 12, fontWeight: 700,
-                        border: `1px solid ${personality === p ? accent : "var(--border)"}`,
-                        background: personality === p ? accent : "var(--surface)",
-                        color: personality === p ? "#fff" : "var(--text)",
-                        boxShadow: personality === p ? "0 4px 12px -4px rgba(0,0,0,0.2)" : "none"
-                      }}
-                    >
-                      <span style={{ marginRight: 4 }}>{ICONS[p]}</span>{p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="connection-card">
-              <h2>Connection</h2>
-              <label>Mode
-                <select value={mode} disabled={typing || uploadBusy || Boolean(pendingRun)} onChange={e => setMode(e.target.value)}>
-                  <option value="agent">Agent · Chandra tools</option>
-                  <option value="direct" disabled={desktopLocalOnlyContext || Boolean(desktopSession) || desktopControlState.unresolved || desktopControlState.busy}>Direct · local Ollama chat</option>
-                  <option value="mock">Demo · canned replies</option>
-                </select>
-              </label>
-              {mode === 'direct' && <label>Ollama endpoint
-                <input value={endpoint} disabled={typing} onChange={e => { setEndpoint(e.target.value); setStatus('idle'); setDirectModels([]); }} />
-              </label>}
-              {mode === 'agent' && (capabilities?.cloudEnabled || capabilities?.allowCloud || capabilities?.cloud?.enabled) && <label className="check-label"><input type="checkbox" checked={cloudOptIn} disabled={typing || desktopLocalOnlyContext || isLocalImageMode(imageMode) || Boolean(desktopSession) || Boolean(pendingRun?.request?.desktopSessionId)} onChange={e => setCloudOptIn(e.target.checked)} />
-                Allow cloud models enabled and budgeted by the server
-              </label>}
-              {mode !== 'mock' && <label>Model
-                <select value={modelKey} disabled={typing} onChange={e => { setModelKey(e.target.value); setThinkingSelection({ modelKey: e.target.value, key: DEFAULT_THINKING_CHOICE }); }}>
-                  <option value="">{models.length ? 'Choose a model' : 'No available models'}</option>
-                  {models.map(m => <option key={modelIdentity(m)} value={modelIdentity(m)}>{describeModel(m)}</option>)}
-                </select>
-              </label>}
-              {mode === 'agent' && selectedModel && isCloudModel(selectedModel) && <label>Maximum cost for this cloud run (USD)
-                <input type="number" min="0.000001" max={capabilities?.cloud?.maxRunCostUsd} step="any" value={cloudMaxCost} disabled={typing} placeholder="Enter a positive spending limit" onChange={e => setCloudMaxCost(e.target.value)} />
-                <span className="small-note">Server ceiling: ${capabilities?.cloud?.maxRunCostUsd ?? 'unconfigured'} · input ${selectedModel.rates?.inputUsdPerMillion ?? 'unknown'}/million · output ${selectedModel.rates?.outputUsdPerMillion ?? 'unknown'}/million tokens.</span>
-              </label>}
-              <button onClick={testConnection} disabled={typing || status === 'checking'}>{status === 'checking' ? 'Checking…' : 'Refresh connection'}</button>
-              <p role="status">{statusMsg}</p>
-              <p className="small-note">Agent uses the Chandra server's provider and tool policy. Demo mode runs no model or tools.</p>
-              {desktopLocalOnlyContext && <p className="desktop-local-only">This conversation contains private desktop, image-helper or scheduled-task context and stays local-only, including after revocation. Revoke any desktop access and clear chat to start a separate conversation. Private browser history is excluded from Direct chat.</p>}
-              {mode === 'agent' && <InteractiveRunOptions model={selectedModel} capabilities={capabilities}
-                disabled={typing || Boolean(pendingRun) || inspectingRun || runsLoading || uploadBusy || desktopControlState.busy || desktopControlState.unresolved}
-                thinkingChoice={thinkingSelection.key} thinkingModelKey={thinkingSelection.modelKey}
-                onThinkingChoice={key => setThinkingSelection({ modelKey: modelIdentity(selectedModel), key })}
-                budgetMode={budgetMode} onBudgetMode={setBudgetMode} customBudget={customBudget}
-                onCustomBudget={patch => setCustomBudget(previous => ({ ...previous, ...patch }))}
-                imageCount={attachments.filter(asset => asset.mimeType?.startsWith('image/')).length} desktop={desktopSession?.state === 'active'} />}
-              {mode === 'agent' && runOptionsError && <p role="alert" className="receipt-error">New Agent request blocked: {runOptionsError}</p>}
-              {mode === 'agent' && <p className="small-note">Default retains the modality input allowance. Explicit input, output, total and duration ceilings stay within server bounds and do not raise the cloud USD ceiling. Local runs retain a $0 API cost ceiling.</p>}
-            </section>
-
-            {/* Stats */}
-            <section style={{
-              background: "var(--text)", color: "#fff", borderRadius: 24, padding: 20, boxShadow: "var(--shadow)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-                <h3 style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", opacity: 0.8 }}>Presentation settings</h3>
-                <span style={{ fontSize: 18 }}>{moodEmoji}</span>
-              </div>
-
-              <p style={{ fontSize: 11, opacity: .75, marginBottom: 16 }}>Mood, XP and affection are playful interface settings. They do not train or change model weights.</p>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>MOOD DISPLAY</span>
-                  <span style={{ fontSize: 12, fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>
-                    {mood}% {mood > 80 ? "lovestruck" : mood > 60 ? "happy" : mood > 40 ? "chill" : "needs coffee"}
-                  </span>
-                </div>
-                <div style={{ height: 10, borderRadius: 99, background: "rgba(255,255,255,0.15)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${mood}%`, borderRadius: 99, background: accent, transition: "width 0.5s" }} />
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>CHAT XP · VISUAL</span>
-                  <span style={{ fontSize: 12, fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>Lv {level} · {xp} / 100</span>
-                </div>
-                <div style={{ height: 10, borderRadius: 99, background: "rgba(255,255,255,0.15)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${xp}%`, borderRadius: 99, background: "#fff", transition: "width 0.5s" }} />
-                </div>
-                <div style={{ fontSize: 11, marginTop: 6, opacity: 0.6 }}>A decorative counter for chat messages.</div>
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>CLINGINESS</span>
-                  <span style={{ fontSize: 12, fontFamily: "ui-monospace, monospace" }}>
-                    {clinginess}% {clinginess > 80 ? "🥺💌" : clinginess > 60 ? "🥹" : "😎"}
-                  </span>
-                </div>
-                <input
-                  type="range" min={0} max={100} value={clinginess}
-                  onChange={(e) => setClinginess(parseInt(e.target.value, 10))}
-                  className="range-thumb"
-                />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, opacity: 0.5, marginTop: 4, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  <span>Independent</span>
-                  <span>Mixtape Maker</span>
-                </div>
-              </div>
-
-              <label style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                borderRadius: 14, padding: 12, cursor: "pointer",
-                background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)"
-              }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Jealous of other models?</div>
-                  <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>Notices if you talk to Niles-FRAYMUS:v9</div>
-                </div>
-                <button
-                  onClick={() => setJealous(!jealous)}
-                  aria-label="toggle jealous"
-                  style={{
-                    width: 44, height: 24, borderRadius: 99, position: "relative",
-                    background: jealous ? "#fff" : "rgba(255,255,255,0.2)", transition: "background 0.2s"
-                  }}
-                >
-                  <div style={{
-                    position: "absolute", top: 2, width: 20, height: 20, borderRadius: 99,
-                    left: jealous ? 22 : 2, background: jealous ? "#000" : "#fff", transition: "left 0.2s"
-                  }} />
-                </button>
-              </label>
-
-              <div style={{ marginTop: 14, borderRadius: 14, padding: 12, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", opacity: 0.6, marginBottom: 8 }}>Memory (on-device)</div>
-                <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div>🍿 Fav snack: <strong>{memory.snack || "not yet — tell me!"}</strong></div>
-                  <div>🎓 Class vibe: <strong>{memory.classMood || "tell me how class is going"}</strong></div>
-                  {memory.userName && <div>🏷️ Calls you: <strong>{memory.userName}</strong></div>}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <button onClick={clearChat} disabled={typing || Boolean(pendingRun)} style={{ flex: 1, padding: "8px 0", borderRadius: 12, fontSize: 12, fontWeight: 700, background: "rgba(255,255,255,0.12)", color: "#fff" }}>
-                  Clear chat
-                </button>
-                <button onClick={exportChat} style={{ flex: 1, padding: "8px 0", borderRadius: 12, fontSize: 12, fontWeight: 700, background: "rgba(255,255,255,0.12)", color: "#fff" }}>
-                  Export
-                </button>
-                <button onClick={resetAll} disabled={typing || Boolean(pendingRun)} style={{ padding: "8px 12px", borderRadius: 12, fontSize: 12, fontWeight: 700, background: "rgba(255,80,80,0.25)", color: "#fff" }}>
-                  Reset
-                </button>
-              </div>
-            </section>
+      <section className="chat-workspace" hidden={workspaceView !== 'chat'} aria-label="Conversation workspace">
+        <div className="message-scroll" ref={scrollRef} onScroll={() => { const area=scrollRef.current; stickToBottom.current=area.scrollHeight-area.scrollTop-area.clientHeight<96; if(stickToBottom.current)setUnread(false); }}>
+          <div className="message-column" role="log" aria-label="Conversation" aria-live="off">
+            {messages.map(message => <article key={message.id} className={`chat-message ${message.role === 'user' ? 'is-user' : 'is-assistant'}`}>
+              <div className="message-author"><span className={`message-avatar ${message.role === 'user' ? 'user-avatar' : ''}`}>{message.role === 'user' ? 'Y' : (name || 'C').slice(0,1).toUpperCase()}</span><strong>{message.role === 'user' ? 'You' : name}</strong>{message.kind === 'greeting' && <span className="message-kind">Welcome</span>}{message.kind === 'demo' && <span className="message-kind">Earlier demo output</span>}<time>{new Date(message.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div>
+              <div className="message-body">{message.role === 'assistant' ? <ResponseContent text={message.text} /> : <div className="user-text">{message.text}</div>}</div>
+            </article>)}
+            {liveText && <article className="chat-message is-assistant"><div className="message-author"><span className="message-avatar">{(name || 'C').slice(0,1)}</span><strong>{name}</strong><span className="message-kind">Responding</span></div><div className="message-body"><ResponseContent text={liveText} /></div></article>}
+            {typing && !liveText && <div className="working-indicator" role="status"><span className="status-spinner" />{agentRun?.approvals?.length ? 'Waiting for your approval' : agentRun?.tools?.at(-1)?.status === 'running' ? `Using ${agentRun.tools.at(-1).name}` : 'Working on your request…'}</div>}
+            {!messages.some(message => message.role === 'user') && <div className="starter-actions">{[['Review code','Review this code and suggest practical improvements:\n\n'],['Work with a file','Summarize the attached document and highlight its key points.'],['Research a topic','Research this topic and cite the sources you use:\n\n']].map(([label,draft]) => <button key={label} disabled={interactionLocked} onClick={() => { setInput(draft); inputRef.current?.focus(); }}><WorkspaceIcon name="arrow" />{label}</button>)}</div>}
           </div>
-        )}
-
-        {/* Chat */}
-        <div style={{
-          borderRadius: 28, overflow: "hidden", display: "flex", flexDirection: "column",
-          minHeight: 640, height: "min(760px, calc(100vh - 120px))",
-          background: "var(--surface)", boxShadow: "var(--shadow)", border: "1px solid var(--border)"
-        }}>
-          {/* Chat header */}
-          <div style={{
-            padding: "16px 20px", borderBottom: "1px solid var(--border)",
-            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ position: "relative" }}>
-                <div style={{
-                  width: 48, height: 48, borderRadius: 16,
-                  background: "var(--surface-2)", border: "1px solid var(--border)",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26
-                }}>
-                  {gender === "female" ? "💁‍♀️" : "🙋‍♂️"}
-                </div>
-                <div style={{
-                  position: "absolute", bottom: -4, right: -4, width: 18, height: 18,
-                  borderRadius: 99, border: "2px solid #fff",
-                  background: status === "connected" ? "#22c55e" : accent,
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff"
-                }}>●</div>
-              </div>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontWeight: 800, fontSize: 16 }}>{name}</span>
-                  <span style={{
-                    fontSize: 11, padding: "2px 8px", borderRadius: 99, fontWeight: 700, color: "#fff", background: accent
-                  }}>{ICONS[personality]} {personality}</span>
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {mode === "mock" ? "Demo · canned replies" : status === "connected" ? `${mode === "agent" ? "Agent" : "Direct chat"} · ${model || "select model"}` : "Disconnected · check connection"}
-                  {typing ? " · typing…" : ""}
-                </div>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{
-                fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 99,
-                border: "1px solid var(--border)", background: "var(--bg)"
-              }}>💬 {messages.length} msgs</span>
-              {!showSettings && (
-                <button
-                  onClick={() => setShowSettings(true)}
-                  style={{
-                    fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99,
-                    border: "1px solid var(--border)", background: "var(--bg)"
-                  }}
-                >Panel</button>
-              )}
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div
-            ref={scrollRef}
-            style={{
-              flex: 1, overflowY: "auto", padding: "16px 20px",
-              background: "radial-gradient(#F0DDD2 1px, transparent 1px)",
-              backgroundSize: "18px 18px", backgroundColor: "#FFFCF8"
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {messages.map((m) => (
-                <div key={m.id} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-                  <div
-                    className={m.role === "user" ? "bubble-user" : "bubble-partner"}
-                    style={{ maxWidth: "78%", padding: "12px 16px", fontSize: 14, lineHeight: 1.45 }}
-                  >
-                    {m.kind === 'greeting' && <div className="message-kind">Greeting · built-in text</div>}
-                    {m.kind === 'demo' && <div className="message-kind">Demo reply · canned text</div>}
-                    <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
-                    <div style={{
-                      marginTop: 4, fontSize: 10, fontFamily: "ui-monospace, monospace",
-                      textAlign: m.role === "user" ? "right" : "left",
-                      color: m.role === "user" ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.4)"
-                    }}>
-                      {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {liveText && <div className="bubble-partner" style={{ padding: '12px 16px', whiteSpace: 'pre-wrap', maxWidth: '85%' }}>{liveText}</div>}
-              {typing && (
-                <div style={{ display: "flex", justifyContent: "flex-start" }}>
-                  <div className="bubble-partner" style={{ padding: "12px 16px", fontSize: 14 }}>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <span className="dot-pulse" style={{ animationDelay: "0s" }} />
-                      <span className="dot-pulse" style={{ animationDelay: "0.15s" }} />
-                      <span className="dot-pulse" style={{ animationDelay: "0.3s" }} />
-                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{name} is typing…</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {pendingRun && <section className="pending-run" aria-label="Unresolved agent request">
+        </div>
+        {unread && <button className="latest-button" onClick={jumpToLatest}><WorkspaceIcon name="down" />Jump to latest</button>}
+        {(typing || (agentRun && (!agentRun.inspected || agentRun.followingLive))) && <div className="run-strip" role="status"><span><span className={typing ? 'status-spinner' : 'status-dot'} />{agentRun?.approvals?.length ? 'Your approval is needed' : typing ? 'Request in progress' : `Run ${agentRun.status}`}</span><div><button onClick={() => navigate('history')}>Activity{agentRun?.usage?.totalTokens ? ` · ${agentRun.usage.totalTokens.toLocaleString()} tokens` : ''}</button>{typing && <button className="stop-action" onClick={cancelRun} disabled={cancelBusy}>{cancelBusy ? 'Stopping…' : 'Stop'}</button>}{agentRun?.inspected && !TERMINAL.has(agentRun.status) && <button className="stop-action" onClick={cancelInspectedRun} disabled={cancelBusy}>{cancelBusy ? 'Stopping…' : 'Cancel run'}</button>}</div></div>}
+        {pendingRun && (!typing || ['reconnecting','paused'].includes(agentRun?.connectionStatus)) && <div className="recovery-tray">          {pendingRun && <section className="pending-run" aria-label="Unresolved agent request">
             <strong>{agentRun?.connectionStatus === 'reconnecting' ? `Reconnecting · attempt ${agentRun.retryAttempt}` : typing ? 'Following existing run' : 'Unresolved request retained'}</strong>
             <code>{pendingRun.runId || pendingRun.request?.requestId}</code>
             {pendingRun.request && <details><summary>Retained model and run options · recovery uses these original values</summary><pre>{JSON.stringify({ model: pendingRun.request.model, provider: pendingRun.request.provider,
@@ -1259,16 +831,45 @@ export default function App() {
             </div>
             {!pendingRun.runId && <p>Recovery reuses the original request ID. It retrieves the prior run, or starts that same request if the server never received it. It does not submit a new request ID.</p>}
           </section>}
-          {mode === 'agent' && <DesktopAccess session={desktopSession} pendingSessionId={pendingRun?.request?.desktopSessionId} locked={typing || Boolean(pendingRun) || inspectingRun || uploadBusy} model={selectedModel} healthRefreshKey={desktopHealthRefreshKey} onSessionChange={setDesktopSession} onHealthChange={setDesktopHealth} onControlState={setDesktopControlState} />}
-          {mode === 'agent' && <TasksPanel capabilities={capabilities} locked={typing || Boolean(pendingRun) || inspectingRun || runsLoading || uploadBusy} receiptsRefreshKey={tasksRefreshKey} onInspectRun={runId => inspectStoredRun(runId, null, true)} />}
-          {mode === 'agent' && <details className="execution-health">
-            <summary>Code execution · {executionStatus(capabilities?.codeExecution).title}{capabilitiesCheckedAt ? ' · last check' : ''}</summary>
-            <ExecutionDetails execution={capabilities?.codeExecution} checkedAt={capabilitiesCheckedAt} />
-            {codeHealthNote && <p>{codeHealthNote}</p>}
-            {codeHealthError && <p className="receipt-error">{codeHealthError}</p>}
-          </details>}
-          {mode === 'agent' && <details className="recent-runs">
-            <summary>Recent runs · durable receipts</summary>
+</div>}
+        {agentRun?.approvals?.length > 0 && <section className="approval-tray" aria-label="Actions needing approval"><h2>Review before continuing</h2>{agentRun.inspected && <p>Scheduled task: {agentRun.goal}</p>}            {agentRun.approvals.map(approval => <div className="approval" key={approval.approvalId}>
+              <strong>Approval required: {approval.name}</strong>
+              {approval.name === 'code.run' && <ExecutionDetails execution={approval.preview?.execution || capabilities?.codeExecution} />}
+              {approval.name === 'code.run' && !capabilities?.codeExecution && capabilities?.codeExecutionWarning && <p>{capabilities.codeExecutionWarning}</p>}
+              {approval.name === 'web.fetch' && <p>Approve only if you want to fetch this exact URL: {approval.arguments?.url}</p>}
+              {approval.name === 'web.follow' && <WebFollowPreview preview={approval.preview} />}
+              {approval.name === 'web.search' && <WebSearchApproval preview={approval.preview} />}
+              {approval.name === 'desktop.act' && <DesktopActionApproval preview={approval.preview} />}
+              {approval.name === 'workspace.edit' && <WorkspaceEditPreview preview={approval.preview} />}
+              {approval.name === 'workspace.patch' && <WorkspacePatchPreview preview={approval.preview} args={approval.arguments} />}
+              <pre>{JSON.stringify(approval.preview ?? approval.arguments, null, 2)}</pre>
+              <details><summary>Exact arguments</summary><pre>{JSON.stringify(approval.arguments, null, 2)}</pre></details>
+              <button disabled={approvalBusy || cancelBusy || !approval.approvalId || Boolean(workspaceEditApprovalError(approval))} onClick={() => approve(approval, true)}>Approve this action</button>
+              <button disabled={approvalBusy || cancelBusy} onClick={() => approve(approval, false)}>Reject</button>
+            </div>)}</section>}
+        {runError && <div role="alert" className="run-error"><span>{runError}</span><button onClick={() => navigate('settings')}>Settings</button><button className="icon-button" aria-label="Dismiss message" onClick={() => setRunError('')}>×</button></div>}
+        <div className="composer-zone">
+          {attachments.length > 0 && <div className="attachment-list">{attachments.map(asset => <article key={asset.assetId || asset.id} className="attached-file"><div className="attached-file-heading"><WorkspaceIcon name="file" /><strong>{asset.name}</strong><button className="icon-button" aria-label={`Remove ${asset.name}`} disabled={interactionLocked} onClick={() => setAttachments(previous => previous.filter(item => (item.assetId || item.id) !== (asset.assetId || asset.id)))}>×</button></div>{asset.document && <details className="document-metadata"><summary>{asset.document.kind === 'audio' ? 'Review transcript' : 'File details'} · {asset.document.textChars?.toLocaleString() ?? '?'} characters{asset.document.pages ? ` · ${asset.document.pages} pages` : ''}</summary>{asset.document.kind === 'audio' && <AudioAttachmentReview asset={asset} disabled={interactionLocked} onUseDraft={text => setInput(text)} />}{Array.isArray(asset.document.entries) && <ul>{asset.document.entries.map((entry,index) => <li key={index}>{typeof entry === 'string' ? entry : entry?.name || entry?.path || `Member ${index+1}`}</li>)}</ul>}{asset.document.warnings?.map((warning,index) => <p className="document-warning" key={index}>{typeof warning === 'string' ? warning : JSON.stringify(warning)}</p>)}</details>}</article>)}</div>}
+          {imageCount > 0 && mode === 'agent' && <div className="image-routing"><label>Image handling<select aria-label="Image handling" value={imagePreference} disabled={interactionLocked} onChange={event => { setImagePreference(event.target.value); if(isLocalImageMode(event.target.value))setCloudOptIn(false); }}><option value="automatic">Automatic · recommended</option><option value="direct">Selected vision model</option><option value="local-tool">Local vision helper</option><option value="local-ocr">Local English OCR</option></select></label><p role={imageModeError ? 'alert' : undefined}>{imageModeError || imageRoutingReason}</p></div>}
+          <div className={`composer ${interactionLocked ? 'is-busy' : ''}`}>
+            <textarea ref={inputRef} aria-label="Message" rows={2} value={transcript || input} disabled={typing || Boolean(pendingRun) || inspectingRun} onChange={event => setInput(event.target.value)} onKeyDown={event => { if(event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing){event.preventDefault();if(!sendBlocked)send();} }} placeholder={typing ? 'Your request is running…' : 'Ask, build, research, or attach a file…'} />
+            <div className="composer-toolbar"><div className="composer-tools">
+              {mode === 'agent' && <><input ref={fileInputRef} className="sr-only" tabIndex={-1} id="chat-file-upload" aria-label="Attach PNG, JPEG, text, Markdown, JSON, PDF, ZIP or WAV" type="file" multiple accept="image/png,image/jpeg,text/plain,text/markdown,application/json,application/pdf,application/zip,application/x-zip-compressed,audio/wav,audio/x-wav,audio/wave" disabled={interactionLocked} onChange={uploadAttachments} /><button className="tool-button" disabled={interactionLocked} title="Attach files" onClick={() => fileInputRef.current?.click()}><WorkspaceIcon name="attach" /><span>{uploadBusy ? 'Uploading…' : 'Attach'}</span></button></>}
+              <button className={`tool-button ${speakOn ? 'is-selected' : ''}`} aria-pressed={speakOn} title="Read completed replies aloud" onClick={() => { setSpeakOn(value => !value);if(speakOn)voiceRef.current.stopSpeech(); }}><WorkspaceIcon name="voice" /><span>{speakOn ? 'Voice on' : 'Voice'}</span></button>
+              {browserStt && <button className={`tool-button ${listening ? 'is-selected' : ''}`} aria-label={listening ? 'Stop microphone' : 'Use browser microphone'} disabled={interactionLocked} onClick={toggleMicrophone}><WorkspaceIcon name="mic" /></button>}
+            </div><button className="send-button" aria-label="Send message" title="Send message" disabled={!input.trim() || sendBlocked} onClick={() => send()}><WorkspaceIcon name="up" /></button></div>
+          </div>
+          <div className="composer-caption"><span>{desktopLocalOnlyContext ? 'Private local-only conversation' : mode === 'agent' ? 'Tools ask before protected actions' : 'Direct chat · no tools'}</span><span>Enter to send · Shift + Enter for a new line</span></div>
+          {runOptionsError && <p className="composer-issue" role="alert">{runOptionsError} <button onClick={() => navigate('settings')}>Review limits</button></p>}
+        </div>
+      </section>
+
+      <section className="workspace-page" hidden={workspaceView !== 'history'} aria-label="History">
+        <div className="page-heading"><div><p className="eyebrow">YOUR WORK</p><h2>Pick up where you left off.</h2><p>Saved chats stay in this browser. Run receipts come from the local server.</p></div><button className="secondary-button" onClick={exportChat}>Export current chat</button></div>
+        {historyError && <p role="alert" className="run-error">{historyError}</p>}
+        <section className="settings-card"><h3>Saved conversations</h3>{archivedChats.length ? <div className="conversation-list">{archivedChats.map(chat => <button key={chat.conversationId} disabled={conversationLocked} onClick={() => restoreConversation(chat)}><WorkspaceIcon name="chat" /><span><strong>{chat.title}</strong><small>{chat.messages.length} messages · {new Date(chat.updatedAt).toLocaleString()}{chat.privateContextLocalOnly ? ' · local only' : ''}</small></span><WorkspaceIcon name="arrow" /></button>)}</div> : <p>Your current conversation is saved automatically. Starting a new chat archives it here.</p>}</section>
+        {mode === 'agent' && <section className="settings-card stored-runs">          <div className="recent-runs">
+            <h3>Agent runs & receipts</h3>
             <p>Review completed, failed or cancelled runs without submitting a task.</p>
             <div className="recent-run-controls">
               <button onClick={refreshRecentRuns} disabled={typing || Boolean(pendingRun) || inspectingRun || runsLoading}>{runsLoading ? 'Reading…' : 'Refresh runs'}</button>
@@ -1281,8 +882,8 @@ export default function App() {
             </div>
             {receiptNote && <p role="status">{receiptNote}</p>}
             {runsError && <p role="alert" className="receipt-error">{runsError}</p>}
-          </details>}
-          {agentRun && <section className="agent-receipt" aria-label="Agent run details">
+          </div></section>}
+        {agentRun && <div className="history-receipt">          {agentRun && <section className="agent-receipt" aria-label="Agent run details">
             <div><strong>{agentRun.inspected ? 'Stored run' : 'Agent'}: {agentRun.status}</strong> <code>{agentRun.runId}</code></div>
             {agentRun.inspected && <p>{agentRun.goal} · {agentRun.model} · {new Date(agentRun.createdAt).toLocaleString()}</p>}
             <RecordedRunSettings settings={agentRun.recordedSettings} />
@@ -1307,176 +908,27 @@ export default function App() {
             {(agentRun.workspaceReceipts || []).map(receipt => <details key={receipt.effectId}><summary>Durable workspace {receipt.kind === 'workspace_patch' ? 'patch' : 'edit'} · {receipt.outcome || 'Outcome unknown'}</summary>{receipt.kind === 'workspace_patch' ? <WorkspacePatchReceipt receipt={receipt} /> : <WorkspaceEditReceipt receipt={receipt} />}<details><summary>Raw durable workspace receipt JSON</summary><pre>{JSON.stringify(receipt, null, 2)}</pre></details></details>)}
             {(agentRun.codeReceipts || []).map(receipt => <details key={receipt.effectId}><summary>Independent code audit · {receipt.outcome || 'Outcome unknown'}</summary><CodeExecutionReceipt receipt={receipt} /><details><summary>Raw independent code receipt JSON</summary><pre>{JSON.stringify(receipt, null, 2)}</pre></details></details>)}
             {agentRun.usage && <RunUsageDetails usage={agentRun.usage} />}
-            {agentRun.approvals.map(approval => <div className="approval" key={approval.approvalId}>
-              <strong>Approval required: {approval.name}</strong>
-              {approval.name === 'code.run' && <ExecutionDetails execution={approval.preview?.execution || capabilities?.codeExecution} />}
-              {approval.name === 'code.run' && !capabilities?.codeExecution && capabilities?.codeExecutionWarning && <p>{capabilities.codeExecutionWarning}</p>}
-              {approval.name === 'web.fetch' && <p>Approve only if you want to fetch this exact URL: {approval.arguments?.url}</p>}
-              {approval.name === 'web.follow' && <WebFollowPreview preview={approval.preview} />}
-              {approval.name === 'web.search' && <WebSearchApproval preview={approval.preview} />}
-              {approval.name === 'desktop.act' && <DesktopActionApproval preview={approval.preview} />}
-              {approval.name === 'workspace.edit' && <WorkspaceEditPreview preview={approval.preview} />}
-              {approval.name === 'workspace.patch' && <WorkspacePatchPreview preview={approval.preview} args={approval.arguments} />}
-              <pre>{JSON.stringify(approval.preview ?? approval.arguments, null, 2)}</pre>
-              <details><summary>Exact arguments</summary><pre>{JSON.stringify(approval.arguments, null, 2)}</pre></details>
-              <button disabled={approvalBusy || cancelBusy || !approval.approvalId || Boolean(workspaceEditApprovalError(approval))} onClick={() => approve(approval, true)}>Approve this action</button>
-              <button disabled={approvalBusy || cancelBusy} onClick={() => approve(approval, false)}>Reject</button>
-            </div>)}
-          </section>}
-          {runError && <div role="alert" className="run-error">{runError}</div>}
-          {typing && !pendingRun?.runId && <button className="cancel-button" onClick={cancelRun}>Cancel {mode === 'agent' ? 'waiting' : 'reply'}</button>}
+          </section>}</div>}
+      </section>
 
-          {/* Quick prompts */}
-          <div style={{
-            padding: "10px 16px", borderTop: "1px solid var(--border)",
-            overflowX: "auto", background: "var(--surface)", display: "flex", gap: 8, whiteSpace: "nowrap"
-          }}>
-            {QUICK_PROMPTS.map((q) => (
-              <button
-                key={q}
-                onClick={() => send(q)}
-                style={{
-                  flexShrink: 0, padding: "6px 14px", borderRadius: 99, fontSize: 12, fontWeight: 700,
-                  border: "1px solid var(--border)", background: "var(--bg)"
-                }}
-              >
-                {q}
-              </button>
-            ))}
-          </div>
+      <section className="workspace-page" hidden={workspaceView !== 'tasks'} aria-label="Tasks">
+        <div className="page-heading"><div><p className="eyebrow">SCHEDULED WORK</p><h2>Set a task. Keep the controls.</h2><p>Preview its schedule and limits before saving. Chandra must stay running.</p></div></div>
+        {mode === 'agent' ? <TasksPanel standalone active={workspaceView === 'tasks'} capabilities={capabilities} locked={interactionLocked} receiptsRefreshKey={tasksRefreshKey} onInspectRun={runId => { setWorkspaceView('history');setMobileNav(false);inspectStoredRun(runId,null,true); }} /> : <section className="settings-card"><h3>Tasks use Agent mode</h3><p>Switch from Direct chat to use the local scheduler.</p><button className="secondary-button" disabled={conversationLocked} onClick={() => setMode('agent')}>Use Agent mode</button></section>}
+      </section>
 
-          {/* Composer */}
-          <div style={{ padding: 16, borderTop: "1px solid var(--border)", background: "var(--surface)" }}>
-            {mode === 'agent' && <div className="attachment-panel">
-              <label className="attachment-picker">{uploadBusy ? 'Uploading…' : 'Attach image, document, ZIP or WAV'}
-                <input aria-label="Attach PNG, JPEG, text, Markdown, JSON, PDF, ZIP or WAV" type="file" multiple accept="image/png,image/jpeg,text/plain,text/markdown,application/json,application/pdf,application/zip,application/x-zip-compressed,audio/wav,audio/x-wav,audio/wave,audio/vnd.wave,.md,.txt,.json,.pdf,.zip,.wav" disabled={typing || uploadBusy || attachments.length >= attachmentLimits.maxAttachments} onChange={uploadAttachments} />
-              </label>
-              <span>{attachmentLimits.maxAttachments} files max · {attachmentLimits.maxFileBytes / (1024 * 1024)} MiB each{attachmentLimits.maxImageBytes !== attachmentLimits.maxFileBytes ? ` · images ${attachmentLimits.maxImageBytes / (1024 * 1024)} MiB max` : ''} · images require direct vision, local helper or local OCR mode</span>
-              <ImageHandlingControl imageMode={imageMode} capabilities={capabilities} model={selectedModel}
-                disabled={typing || uploadBusy || Boolean(pendingRun) || inspectingRun || runsLoading}
-                onChange={value => { setImageMode(value); if (isLocalImageMode(value)) setCloudOptIn(false); }} />
-              <span className="document-help">PDFs provide extracted text by default. {capabilities?.localOcr?.pdf?.available === true ? 'Local OCR can read one selected page; check its fallible text against the source.' : 'PDF page OCR is currently unavailable.'} OCR does not interpret diagrams. ZIP members are indexed as untrusted data, without file extraction or execution.</span>
-              <span className="document-help">WAV uploads use local machine transcription. Review the transcript before using it as a draft; attached transcripts remain untrusted reference data.</span>
-              {attachments.map(asset => <div key={asset.assetId || asset.id} className="attached-file">
-                <div className="attached-file-info">
-                  <span>{asset.name} · {asset.size ?? '?'} bytes</span>
-                  {asset.document && <div className="document-metadata">
-                    <span>{asset.document.kind === 'pdf' ? 'PDF · extracted text' : asset.document.kind === 'zip' ? 'ZIP · indexed source data' : asset.document.kind === 'audio' ? 'WAV · machine transcript' : 'Document'} · {Number.isFinite(asset.document.textChars) ? asset.document.textChars.toLocaleString() : 'unknown'} characters{Number.isFinite(asset.document.pages) ? ` · ${asset.document.pages} pages` : ''}</span>
-                    {asset.document.kind === 'audio' && <AudioAttachmentReview asset={asset} disabled={typing || uploadBusy || Boolean(pendingRun) || inspectingRun || runsLoading} onUseDraft={text => setInput(text)} />}
-                    {Array.isArray(asset.document.entries) && <details><summary>ZIP index · {asset.document.entries.length} entries</summary><ul>{asset.document.entries.map((entry, index) => <li key={index}>{typeof entry === 'string' ? entry : entry?.name || entry?.path || `Member ${index + 1}`}</li>)}</ul></details>}
-                    {Array.isArray(asset.document.warnings) && asset.document.warnings.map((warning, index) => <p className="document-warning" key={index}>{typeof warning === 'string' ? warning : JSON.stringify(warning)}</p>)}
-                  </div>}
-                </div>
-                <button aria-label={`Remove ${asset.name}`} disabled={typing || uploadBusy} onClick={() => setAttachments(previous => previous.filter(a => (a.assetId || a.id) !== (asset.assetId || asset.id)))}>Remove</button>
-              </div>)}
-            </div>}
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-              <button
-                disabled={!browserStt || typing || inspectingRun || runsLoading || Boolean(pendingRun)}
-                onClick={() => {
-                  if (listening) { voiceRef.current.stopListening(); setListening(false); setTranscript(''); return; }
-                  setListening(true);
-                  voiceRef.current.listen({ allowed: browserStt,
-                    onFinal: final => { setListening(false); setTranscript(''); submitTranscript(final, send); },
-                    onInterim: setTranscript,
-                    onEnd: () => { setListening(false); setTranscript(''); },
-                    onError: message => setRunError(message)
-                  });
-                }}
-                title="Browser speech recognition · may send audio to its service; opt-in required"
-                style={{
-                  width: 40, height: 40, borderRadius: 99, flexShrink: 0, fontSize: 16,
-                  border: "1px solid var(--border)", cursor: "pointer",
-                  background: listening ? "rgba(255,60,60,0.55)" : "var(--bg)",
-                  animation: listening ? "pulse 1.2s infinite" : "none"
-                }}
-              >
-                {listening ? "⏹" : "🎙"}
-              </button>
-              <div style={{ flex: 1, position: "relative" }}>
-                <input
-                  value={transcript || input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  placeholder={`Message ${name}... (try "FRAYMUS" or your favorite snack)`}
-                  style={{
-                    width: "100%", borderRadius: 18, border: "1px solid var(--border)",
-                    padding: "14px 48px 14px 16px", fontSize: 14, background: "var(--bg)", outline: "none"
-                  }}
-                />
-                <button
-                  onClick={() => send()}
-                  disabled={!input.trim() || typing || uploadBusy || Boolean(pendingRun) || inspectingRun || runsLoading || desktopControlState.busy || desktopControlState.unresolved || (mode === 'agent' && (Boolean(runOptionsError) || Boolean(imageModeError)))}
-                  style={{
-                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
-                    width: 36, height: 36, borderRadius: 99, display: "flex", alignItems: "center",
-                    justifyContent: "center", color: "#fff", fontWeight: 700, background: accent,
-                    opacity: !input.trim() || typing ? 0.4 : 1
-                  }}
-                >
-                  ↑
-                </button>
-              </div>
-            </div>
-            <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 10, color: "var(--muted)", lineHeight: 1.3 }}>
-                Chat history is stored in this browser · {listening ? "Browser microphone active" : voiceEngine}
-              </div>
-              <div style={{ display: "flex", gap: 6, fontSize: 10, fontWeight: 700 }}>
-                <label className="check-label"><input type="checkbox" checked={browserStt} disabled={typing} onChange={e => { setBrowserStt(e.target.checked); if (!e.target.checked) { voiceRef.current.stopListening(); setListening(false); } }} /> Browser STT (may use a remote service)</label>
-                <button
-                  onClick={() => setSpeakOn(!speakOn)}
-                  title="Speak completed replies using the advertised voice bridge or browser synthesis"
-                  style={{ padding: "4px 8px", borderRadius: 99, border: "1px solid var(--border)",
-                           background: speakOn ? "rgba(120,255,160,0.25)" : "transparent", cursor: "pointer" }}>
-                  {speakOn ? "🔊 ON" : "🔇 OFF"}
-                </button>
-                <span style={{ padding: "4px 8px", borderRadius: 99, border: "1px solid var(--border)" }}>↵ Send</span>
-              </div>
-            </div>
-          </div>
+      <section className="workspace-page" hidden={workspaceView !== 'settings'} aria-label="Settings">
+        <div className="page-heading"><div><p className="eyebrow">MAKE IT YOURS</p><h2>Good defaults. Control when you need it.</h2><p>Your model, privacy settings and approvals stay in your hands.</p></div></div>
+        <div className="settings-grid">
+          <section className="settings-card"><h3>Models & connection</h3><label>Working mode<select value={mode} disabled={interactionLocked} onChange={event => setMode(event.target.value)}><option value="agent">Agent · tools and approvals</option><option value="direct" disabled={desktopLocalOnlyContext || Boolean(desktopSession) || desktopControlState.unresolved || desktopControlState.busy}>Direct · local chat only</option></select></label><p>{mode === 'agent' ? 'Uses Chandra’s configured tools and server policies.' : 'Talks to your local Ollama model without tools.'}</p>{mode === 'direct' && <label>Ollama endpoint<input value={endpoint} disabled={interactionLocked} onChange={event => {setEndpoint(event.target.value);setStatus('idle');setDirectModels([]);}} /></label>}<label>Model<select aria-label="Settings model" value={modelKey} disabled={interactionLocked} onChange={event => setModelKey(event.target.value)}><option value="">Choose a model</option>{models.map(candidate => <option key={modelIdentity(candidate)} value={modelIdentity(candidate)}>{describeModel(candidate)}</option>)}</select></label><button className="secondary-button" onClick={testConnection} disabled={interactionLocked || status === 'checking'}>{status === 'checking' ? 'Checking…' : 'Refresh connection'}</button><p className={`connection-note ${status === 'error' ? 'receipt-error' : ''}`} role="status">{statusMsg}</p>{desktopLocalOnlyContext && <p className="desktop-local-only">This conversation stays local. Start a separate chat after revoking desktop access to use a different provider.</p>}</section>
+          <section className="settings-card"><h3>Appearance & conversation</h3><label>Theme<select value={themePreference} onChange={event => setThemePreference(event.target.value)}><option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Assistant label<input value={name} maxLength={18} onChange={event => setName(event.target.value.slice(0,18))} /></label>{mode === 'direct' && <label>Chat tone<select value={personality} onChange={event => setPersonality(event.target.value)}>{PERSONALITIES.map(value => <option key={value}>{value}</option>)}</select></label>}<p>Chat history and appearance are saved in this browser.</p><button className="secondary-button" onClick={exportChat}>Export current chat</button></section>
+          <section className="settings-card"><h3>Run controls</h3>{mode === 'agent' ? <InteractiveRunOptions model={selectedModel} capabilities={capabilities} disabled={interactionLocked} thinkingChoice={thinkingSelection.key} thinkingModelKey={thinkingSelection.modelKey} onThinkingChoice={key => setThinkingSelection({modelKey:modelIdentity(selectedModel),key})} budgetMode={budgetMode} onBudgetMode={setBudgetMode} customBudget={customBudget} onCustomBudget={patch => setCustomBudget(previous => ({...previous,...patch}))} imageCount={imageCount} desktop={desktopSession?.state === 'active'} /> : <p>Agent mode adds reasoning controls and tool budgets.</p>}<p>Defaults follow your model and server limits. No automatic spending or permission increases.</p></section>
+          <section className="settings-card"><h3>Images & files</h3><label>Image handling<select value={imagePreference} disabled={interactionLocked} onChange={event => {setImagePreference(event.target.value);if(isLocalImageMode(event.target.value))setCloudOptIn(false);}}><option value="automatic">Automatic · recommended</option><option value="direct">Selected vision model</option><option value="local-tool">Local vision helper</option><option value="local-ocr">Local English OCR</option></select></label><p>Automatic chooses an available image route for your selected model. Files are inspected only after you send a request.</p><p>Attach up to {attachmentLimits.maxAttachments} files, {attachmentLimits.maxFileBytes ? attachmentLimits.maxFileBytes/(1024*1024) : 4} MiB each. PDF text, ZIP source files and local WAV transcripts are supported. OCR can misread text; verify important results.</p></section>
+          <section className="settings-card"><h3>Voice</h3><p>{voiceEngine}</p><label className="check-label"><input type="checkbox" checked={speakOn} onChange={event => {setSpeakOn(event.target.checked);if(!event.target.checked)voiceRef.current.stopSpeech();}} />Read completed replies aloud</label><label className="check-label"><input type="checkbox" checked={browserStt} disabled={typing} onChange={event => {setBrowserStt(event.target.checked);if(!event.target.checked){voiceRef.current.stopListening();setListening(false);}}} />Enable browser microphone</label><p>Browser recognition may send audio to its service. For local transcription, attach a WAV and review the transcript before using it.</p></section>
+          {mode === 'agent' && <section className="settings-card"><h3>Tool availability</h3><ExecutionDetails execution={capabilities?.codeExecution} checkedAt={capabilitiesCheckedAt} />{codeHealthNote && <p>{codeHealthNote}</p>}{codeHealthError && <p className="receipt-error">{codeHealthError}</p>}<details className="advanced-desktop"><summary>Desktop access · advanced</summary><DesktopAccess session={desktopSession} pendingSessionId={pendingRun?.request?.desktopSessionId} locked={interactionLocked} model={selectedModel} healthRefreshKey={desktopHealthRefreshKey} onSessionChange={setDesktopSession} onHealthChange={setDesktopHealth} onControlState={setDesktopControlState} /></details></section>}
+          {mode === 'agent' && (capabilities?.cloudEnabled || capabilities?.allowCloud || capabilities?.cloud?.enabled) && <section className="settings-card"><h3>Optional cloud provider</h3><label className="check-label"><input type="checkbox" checked={cloudOptIn} disabled={interactionLocked || desktopLocalOnlyContext || isLocalImageMode(imageMode) || Boolean(desktopSession)} onChange={event => setCloudOptIn(event.target.checked)} />Show server-enabled cloud models</label>{selectedModel && isCloudModel(selectedModel) && <label>Maximum cost for this run (USD)<input type="number" min="0.000001" max={capabilities?.cloud?.maxRunCostUsd} step="any" value={cloudMaxCost} disabled={interactionLocked} onChange={event => setCloudMaxCost(event.target.value)} /><small>Server ceiling: ${capabilities?.cloud?.maxRunCostUsd ?? 'unconfigured'}.</small></label>}<p>Cloud is never selected automatically and requires an explicit run budget.</p></section>}
         </div>
-      </main>
-
-      {/* Footer */}
-      <footer style={{ maxWidth: 1280, margin: "0 auto", padding: "8px 16px 32px" }}>
-        <div style={{
-          borderRadius: 18, padding: 16, display: "flex", flexWrap: "wrap", gap: 12,
-          alignItems: "center", justifyContent: "space-between",
-          background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-soft)"
-        }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: 99, background: "var(--text)",
-              color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 14, flexShrink: 0
-            }}>φ</div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 800 }}>Your partner, with clear boundaries</div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, maxWidth: 680, lineHeight: 1.4 }}>
-                An AI companion with a playful personality. Chat history is stored in this browser. Agent requests and tool results pass through Chandra; configured providers and voice services may process them. Review tool previews before approving an action.
-              </div>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <span style={{ fontSize: 11, padding: "6px 12px", borderRadius: 99, fontWeight: 700, border: "1px solid var(--border)", background: "var(--bg)" }}>
-              Healthy boundaries
-            </span>
-            <span style={{ fontSize: 11, padding: "6px 12px", borderRadius: 99, fontWeight: 700, color: "#fff", background: "var(--text)" }}>
-              FRAYMUS φ
-            </span>
-          </div>
-        </div>
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, fontFamily: "ui-monospace, monospace", color: "var(--muted)" }}>
-          My AI Partner™ · Agent and voice companion · {new Date().getFullYear()}
-        </div>
-      </footer>
-
-      {toast && <div className="toast">{toast}</div>}
+      </section>
     </div>
-  );
+    {toast && <div className="toast" role="status">{toast}</div>}
+  </div>;
 }

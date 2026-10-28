@@ -137,7 +137,7 @@ test('reload recovery serializes the exact retained reasoning/budget even when c
 
 const compiled = await build({
   entryPoints: [fileURLToPath(new URL('../src/App.jsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'silent',
-  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react$/ }, () => ({ path: import.meta.resolve('react'), external: true })); } }]
+  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: import.meta.resolve(args.path), external: true })); } }]
 });
 const { default: App, InteractiveRunOptions, RecordedRunSettings } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 
@@ -183,14 +183,15 @@ function renderApp(pending, saved = null) {
   finally { globalThis.fetch = previousFetch; if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage); else delete globalThis.localStorage; }
 }
 
-test('actual App SSR ignores saved controls/trace fields and starts with its existing Settings panel closed', () => {
+test('actual App SSR ignores saved controls/trace fields and starts with Settings outside the chat workspace', () => {
   const markup = renderApp(null, { mode: 'agent', thinkingSelection: { key: 'RAW_TRACE_SENTINEL' }, budgetMode: 'extended', thinkingTrace: 'RAW_TRACE_SENTINEL' });
-  assert.ok(markup.includes('>Settings</button>'));
-  assert.ok(markup.includes('class="scheduled-tasks"'), 'Agent mode still renders its normal controls.');
+  assert.ok(markup.includes('<span>Settings</span></button>'));
+  assert.ok(markup.includes('class="scheduled-tasks standalone"'), 'Agent mode retains its functional task controls.');
   assert.equal(markup.includes('RAW_TRACE_SENTINEL'), false);
-  assert.equal(markup.includes('aria-label="New interactive Agent run options"'), false, 'Connection settings retain their collapsed initial lifecycle.');
+  assert.match(markup, /<section class="workspace-page" hidden="" aria-label="Settings">/);
+  assert.match(markup, /<details aria-label="New interactive Agent run options"/);
   const direct = renderApp(null, { mode: 'direct' });
-  assert.equal(direct.includes('class="scheduled-tasks"'), false);
+  assert.equal(direct.includes('class="scheduled-tasks standalone"'), false);
   assert.equal(direct.includes('aria-label="New interactive Agent run options"'), false);
 });
 
@@ -202,7 +203,8 @@ test('actual App SSR keeps restored request reasoning/limits visible without reo
   assert.match(markup, /&quot;maxOutputTokens&quot;: 4096/);
   assert.match(markup, /&quot;maxInputTokens&quot;: 32768/);
   assert.match(markup, /Unresolved request retained/);
-  assert.equal(markup.includes('aria-label="New interactive Agent run options"'), false);
+  assert.match(markup, /<section class="workspace-page" hidden="" aria-label="Settings">/);
+  assert.match(markup, /aria-label="Interactive Agent limits" disabled=""/);
   const freshLocked = renderToStaticMarkup(React.createElement(InteractiveRunOptions, { disabled: true, model: local, capabilities }));
   assert.match(freshLocked, /aria-label="Interactive Agent limits" disabled=""/);
   assert.match(freshLocked, /<option value="default" selected="">Default/);

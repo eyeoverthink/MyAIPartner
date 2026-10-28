@@ -58,7 +58,7 @@ function patchReceipt(states = ['verified', 'not_dispatched'], outcome = 'partia
 
 const compiled = await build({
   entryPoints: [fileURLToPath(new URL('../src/App.jsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'silent',
-  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react$/ }, () => ({ path: import.meta.resolve('react'), external: true })); } }]
+  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: import.meta.resolve(args.path), external: true })); } }]
 });
 const { default: App, WorkspacePatchPreview, WorkspacePatchReceipt } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 

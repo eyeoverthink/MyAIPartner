@@ -102,7 +102,7 @@ test('terminal replay preserves recorded imageMode from the GET record, not curr
 
 const compiled = await build({
   entryPoints: [fileURLToPath(new URL('../src/App.jsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'silent',
-  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react$/ }, () => ({ path: import.meta.resolve('react'), external: true })); } }]
+  plugins: [{ name: 'shared-react', setup(builder) { builder.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: import.meta.resolve(args.path), external: true })); } }]
 });
 const { default: App, ImageHandlingControl, RecordedRunSettings } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 
@@ -136,7 +136,7 @@ test('actual local OCR control exposes availability and accuracy limits without 
   assert.doesNotMatch(text,/<(img|iframe|video|audio)\b/);
 });
 
-test('actual App SSR defaults image mode independently of saved preferences and retains unresolved mode without requests', () => {
+test('actual App SSR defaults to automatic image routing and retains an unresolved request mode without requests', () => {
   const request = buildAgentRequest({ ...base(), imageMode: 'local-tool' });
   const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'), previousFetch = globalThis.fetch;
   let pending = null;
@@ -146,12 +146,12 @@ test('actual App SSR defaults image mode independently of saved preferences and 
   globalThis.fetch = () => { calls.push('request'); throw new Error('No SSR inference/upload/recovery request is allowed.'); };
   try {
     const fresh = renderToStaticMarkup(React.createElement(App));
-    assert.ok(fresh.includes('<option value="direct" selected="">Direct vision model'));
+    assert.ok(fresh.includes('<option value="automatic" selected="">Automatic · recommended'));
     pending = { request, conversationId: request.conversationId };
     const restored = renderToStaticMarkup(React.createElement(App));
     assert.ok(restored.includes('&quot;imageMode&quot;: &quot;local-tool&quot;'));
-    assert.ok(restored.includes('aria-label="Image handling" disabled=""'));
-    assert.ok(restored.includes('<option value="direct" selected="">Direct vision model'));
+    assert.match(restored, /<label>Image handling<select disabled=""/);
+    assert.ok(restored.includes('<option value="automatic" selected="">Automatic · recommended'));
     assert.deepEqual(calls, []);
   } finally { globalThis.fetch = previousFetch; if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage); else delete globalThis.localStorage; }
 });

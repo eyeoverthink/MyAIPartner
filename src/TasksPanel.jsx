@@ -6,7 +6,7 @@ import { buildTaskMutation, buildTaskSpec, cancelTaskRequest, defaultTaskForm, l
 const textError = value => typeof value === 'string' ? value : value?.message || (value ? JSON.stringify(value) : '');
 const isTask = value => value && typeof value.id === 'string' && Number.isSafeInteger(value.revision) && value.revision >= 1 && typeof value.status === 'string';
 
-export default function TasksPanel({ capabilities, locked = false, onInspectRun, receiptsRefreshKey = '' }) {
+export default function TasksPanel({ capabilities, locked = false, onInspectRun, receiptsRefreshKey = '', standalone = false, active = true }) {
   const restored = useMemo(() => loadTaskRequest(), []);
   const [pending, setPending] = useState(restored);
   const pendingRef = useRef(restored);
@@ -18,7 +18,7 @@ export default function TasksPanel({ capabilities, locked = false, onInspectRun,
   const [selectedId, setSelectedId] = useState('');
   const [selected, setSelected] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  const [opened, setOpened] = useState(false);
+  const [opened, setOpened] = useState(standalone);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState('');
@@ -35,10 +35,11 @@ export default function TasksPanel({ capabilities, locked = false, onInspectRun,
     return () => { alive.current = false; generation.current++; reads.current?.abort(); writes.current?.abort(); cancellation.current?.abort(); };
   }, []);
   useEffect(() => {
-    if (!opened || busy || cancelling || !receiptsRefreshKey || lastReceiptRefresh.current === receiptsRefreshKey) return;
+    if (!active || !opened || busy || cancelling || !receiptsRefreshKey || lastReceiptRefresh.current === receiptsRefreshKey) return;
     lastReceiptRefresh.current = receiptsRefreshKey;
     refreshTasks();
-  }, [opened, busy, cancelling, receiptsRefreshKey]);
+  }, [active, opened, busy, cancelling, receiptsRefreshKey]);
+  useEffect(() => { if (standalone && active && !loaded && !busy && !cancelling) refreshTasks(); }, [standalone, active]);
 
   function change(values) {
     formRevision.current++; reads.current?.abort(); setBusy(false); setPreview(null);
@@ -162,10 +163,10 @@ export default function TasksPanel({ capabilities, locked = false, onInspectRun,
     setNote(`Editing ${selected.title} at revision ${selected.revision}. Preview again before applying an update.`);
   }
 
-  return <details className="scheduled-tasks" onToggle={event => setOpened(event.currentTarget.open)}>
+  return <details className={`scheduled-tasks ${standalone ? 'standalone' : ''}`} open={standalone ? true : undefined} onToggle={event => setOpened(event.currentTarget.open)}>
     <summary>Scheduled tasks{pending ? ' · unresolved request retained' : ''}</summary>
-    <p><strong>Local Ollama only · app must remain running.</strong> Goals run within explicit run/token limits. Missed intervals coalesce into one run; they do not burst. Approval-needed work pauses future runs. Code execution remains subject to Docker availability and the tool approval policy.</p>
-    <p>This is a separate goal. Chat history, attachments, desktop access and cloud authorization are never copied into it.</p>
+    <p><strong>Local Ollama only · app must remain running.</strong> Give the task its own goal, preview the schedule, then save.</p>
+    <details className="task-guidance"><summary>How scheduled work is bounded</summary><p>Goals run within explicit run/token limits. Missed intervals coalesce into one run; they do not burst. Approval-needed work pauses future runs. Code execution remains subject to Docker availability and the tool approval policy.</p><p>This is a separate goal. Chat history, attachments, desktop access and cloud authorization are never copied into it.</p></details>
     {pending && <section className="task-recovery" aria-label="Unresolved scheduled task request">
       <strong>Unresolved {pending.operation} request</strong><code>{pending.requestId}</code>
       <p>The exact original URL and body are retained. Reload did not create, update, or retry a task. New changes are blocked until this request is resolved.</p>
